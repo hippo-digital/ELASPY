@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import math
 import datetime
-import numpy as np
-import matplotlib.pyplot as plt
-
+import math
 from typing import Any
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+TARGET_TIME = 12.5
 
 
 def plot_response_times(
@@ -49,9 +51,9 @@ def plot_response_times(
         ms=5,
         linestyle="none",
     )
-    ax.axhline(y=12, color="grey")
+    ax.axhline(y=TARGET_TIME, color="grey")
 
-    ax.text(1, 12.5, "Response time target", color="grey")
+    ax.text(1, TARGET_TIME, f"Response time target ({TARGET_TIME} mins)", color="grey")
     ax.set_title("Response time per patient", fontsize=14)
     ax.set_xlabel("Patient number", fontsize=12)
     ax.set_ylabel("Response time (min)", fontsize=12)
@@ -70,7 +72,7 @@ def plot_response_times(
 
     fig = plt.figure(figsize=(10, 5))
     plt.hist(df_patient["response_time"], color="darkblue", bins=20)
-    plt.axvline(x=12, color="red", linestyle="--")
+    plt.axvline(x=TARGET_TIME, color="red", linestyle="--")
     plt.title("Histogram of response times", size=14)
     plt.xlabel("Response time", size=12)
     plt.ylabel("Frequency", size=12)
@@ -123,7 +125,7 @@ def plot_response_times(
 
     print(
         "The running time for plotting the response time "
-        f"figures is: {datetime.datetime.now()-start_time}."
+        f"figures is: {datetime.datetime.now() - start_time}."
     )
 
 
@@ -171,9 +173,7 @@ def plot_battery_levels(
         battery_data = df_ambulance.loc[
             df_ambulance["ambulance_ID"] == i, "battery_level_after"
         ]
-        axs[vert_count, hor_count].plot(
-            time_data, battery_data, color="darkblue"
-        )
+        axs[vert_count, hor_count].plot(time_data, battery_data, color="darkblue")
         axs[vert_count, hor_count].set_title(f"Ambulance {i}", fontsize=12)
         if hor_count + 1 == NUM_COLS:
             vert_count += 1
@@ -197,7 +197,7 @@ def plot_battery_levels(
 
     print(
         "The running time for plotting the battery levels "
-        f"figure is: {datetime.datetime.now()-start_time}."
+        f"figure is: {datetime.datetime.now() - start_time}."
     )
 
 
@@ -259,5 +259,5 @@ def hist_battery_increase_decrease(
 
     print(
         "The running time for plotting the battery increase/decrease "
-        f"figures is: {datetime.datetime.now()-start_time}."
+        f"figures is: {datetime.datetime.now() - start_time}."
     )

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from typing import Any
-from pathlib import Path
-
 import datetime
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
@@ -104,13 +104,13 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
         raise Exception(
             "The value of START_SEED_VALUE should be equal to "
             "or larger than 0 but is "
-            f'{SIMULATION_PARAMETERS["START_SEED_VALUE"]}.'
+            f"{SIMULATION_PARAMETERS['START_SEED_VALUE']}."
         )
 
     if not Path(SIMULATION_PARAMETERS["DATA_DIRECTORY"]).exists():
         raise Exception(
             "The directory "
-            f'{SIMULATION_PARAMETERS["DATA_DIRECTORY"]}'
+            f"{SIMULATION_PARAMETERS['DATA_DIRECTORY']}"
             " does not exist. "
             "Please specify a different DATA_DIRECTORY."
         )
@@ -127,13 +127,11 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
 
     if (
         SIMULATION_PARAMETERS["LOAD_INPUT_DATA"]
-        and not Path(
-            SIMULATION_PARAMETERS["SIMULATION_INPUT_DIRECTORY"]
-        ).exists()
+        and not Path(SIMULATION_PARAMETERS["SIMULATION_INPUT_DIRECTORY"]).exists()
     ):
         raise Exception(
             "The directory "
-            f'{SIMULATION_PARAMETERS["SIMULATION_INPUT_DIRECTORY"]}'
+            f"{SIMULATION_PARAMETERS['SIMULATION_INPUT_DIRECTORY']}"
             " does not exist. Please specify a different"
             " SIMULATION_INPUT_DIRECTORY."
         )
@@ -201,7 +199,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
     if not Path(SIMULATION_PARAMETERS["SIMULATION_OUTPUT_DIRECTORY"]).exists():
         raise Exception(
             "The directory "
-            f'{SIMULATION_PARAMETERS["SIMULATION_OUTPUT_DIRECTORY"]}'
+            f"{SIMULATION_PARAMETERS['SIMULATION_OUTPUT_DIRECTORY']}"
             " does not exist. Please specify a different"
             " SIMULATION_OUTPUT_DIRECTORY."
         )
@@ -212,37 +210,34 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
     ).exists():
         raise Exception(
             "The TRAVEL_TIMES_FILE "
-            f'({SIMULATION_PARAMETERS["TRAVEL_TIMES_FILE"]})'
+            f"({SIMULATION_PARAMETERS['TRAVEL_TIMES_FILE']})"
             " points to a non-existing file."
         )
 
     if not Path(
-        SIMULATION_PARAMETERS["DATA_DIRECTORY"]
-        + SIMULATION_PARAMETERS["DISTANCE_FILE"]
+        SIMULATION_PARAMETERS["DATA_DIRECTORY"] + SIMULATION_PARAMETERS["DISTANCE_FILE"]
     ).exists():
         raise Exception(
             "The DISTANCE_FILE "
-            f'({SIMULATION_PARAMETERS["DISTANCE_FILE"]})'
+            f"({SIMULATION_PARAMETERS['DISTANCE_FILE']})"
             " points to a non-existing file."
         )
 
     if not Path(
-        SIMULATION_PARAMETERS["DATA_DIRECTORY"]
-        + SIMULATION_PARAMETERS["NODES_FILE"]
+        SIMULATION_PARAMETERS["DATA_DIRECTORY"] + SIMULATION_PARAMETERS["NODES_FILE"]
     ).exists():
         raise Exception(
             "The NODES_FILE "
-            f'({SIMULATION_PARAMETERS["NODES_FILE"]})'
+            f"({SIMULATION_PARAMETERS['NODES_FILE']})"
             " points to a non-existing file."
         )
 
     if not Path(
-        SIMULATION_PARAMETERS["DATA_DIRECTORY"]
-        + SIMULATION_PARAMETERS["HOSPITAL_FILE"]
+        SIMULATION_PARAMETERS["DATA_DIRECTORY"] + SIMULATION_PARAMETERS["HOSPITAL_FILE"]
     ).exists():
         raise Exception(
             "The HOSPITAL_FILE "
-            f'({SIMULATION_PARAMETERS["HOSPITAL_FILE"]})'
+            f"({SIMULATION_PARAMETERS['HOSPITAL_FILE']})"
             " points to a non-existing file."
         )
 
@@ -252,7 +247,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
     ).exists():
         raise Exception(
             "The BASE_LOCATIONS_FILE "
-            f'({SIMULATION_PARAMETERS["BASE_LOCATIONS_FILE"]})'
+            f"({SIMULATION_PARAMETERS['BASE_LOCATIONS_FILE']})"
             " points to a non-existing file."
         )
 
@@ -262,7 +257,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
     ).exists():
         raise Exception(
             "The AMBULANCE_BASE_LOCATIONS_FILE "
-            f'({SIMULATION_PARAMETERS["AMBULANCE_BASE_LOCATIONS_FILE"]})'
+            f"({SIMULATION_PARAMETERS['AMBULANCE_BASE_LOCATIONS_FILE']})"
             " points to a non-existing file."
         )
 
@@ -272,7 +267,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
     ).exists():
         raise Exception(
             "The CHARGING_SCENARIO_FILE "
-            f'({SIMULATION_PARAMETERS["CHARGING_SCENARIO_FILE"]})'
+            f"({SIMULATION_PARAMETERS['CHARGING_SCENARIO_FILE']})"
             " points to a non-existing file."
         )
 
@@ -299,13 +294,12 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
                 f"{SIMULATION_PARAMETERS['DATA_DIRECTORY']}"
                 f"{SIMULATION_PARAMETERS['AMBULANCE_BASE_LOCATIONS_FILE']}",
                 index_col=0,
-            ),
+            )["Base"],
             postal_codes,
         )
     ):
         raise Exception(
-            "Not all assigned ambulance bases are present "
-            "in the postal codes."
+            "Not all assigned ambulance bases are present in the postal codes."
         )
 
     if not np.all(
@@ -317,9 +311,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
             postal_codes,
         )
     ):
-        raise Exception(
-            "Not all ambulance bases are present in the postal codes."
-        )
+        raise Exception("Not all ambulance bases are present in the postal codes.")
 
     if not np.all(
         np.isin(
@@ -331,9 +323,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
             ).index,
         )
     ):
-        raise Exception(
-            "Not all postal codes are present in the distance matrix."
-        )
+        raise Exception("Not all postal codes are present in the distance matrix.")
 
     if not np.all(
         np.isin(
@@ -345,9 +335,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
             ).index,
         )
     ):
-        raise Exception(
-            "Not all postal codes are present in the travel times matrix."
-        )
+        raise Exception("Not all postal codes are present in the travel times matrix.")
 
     if (
         SIMULATION_PARAMETERS["LOAD_INPUT_DATA"]
@@ -491,17 +479,13 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
         SIMULATION_PARAMETERS["SCENARIO"] == "Diesel"
         and SIMULATION_PARAMETERS["ENGINE_TYPE"] != "diesel"
     ):
-        raise Exception(
-            "SCENARIO is 'Diesel', but ENGINE_TYPE is not 'diesel'."
-        )
+        raise Exception("SCENARIO is 'Diesel', but ENGINE_TYPE is not 'diesel'.")
 
     if (
         SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel"
         and SIMULATION_PARAMETERS["SCENARIO"] != "Diesel"
     ):
-        raise Exception(
-            "ENGINE_TYPE is 'diesel', but SCENARIO is not 'Diesel'."
-        )
+        raise Exception("ENGINE_TYPE is 'diesel', but SCENARIO is not 'Diesel'.")
 
     if (
         SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric"
@@ -513,20 +497,18 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
         SIMULATION_PARAMETERS["SCENARIO"] != "Diesel"
         and SIMULATION_PARAMETERS["ENGINE_TYPE"] != "electric"
     ):
-        raise Exception(
-            "SCENARIO is not 'Diesel', but ENGINE_TYPE is not 'electric'."
-        )
+        raise Exception("SCENARIO is not 'Diesel', but ENGINE_TYPE is not 'electric'.")
 
     if SIMULATION_PARAMETERS["NUM_RUNS"] <= 0:
         raise Exception(
             "The value of NUM_RUNS should be larger than "
-            f'0 but is {SIMULATION_PARAMETERS["NUM_RUNS"]}.'
+            f"0 but is {SIMULATION_PARAMETERS['NUM_RUNS']}."
         )
 
     if SIMULATION_PARAMETERS["NUM_AMBULANCES"] <= 0:
         raise Exception(
             "The value of NUM_AMBULANCES should be larger than "
-            f'0 but is {SIMULATION_PARAMETERS["NUM_AMBULANCES"]}.'
+            f"0 but is {SIMULATION_PARAMETERS['NUM_AMBULANCES']}."
         )
 
     if (
@@ -576,8 +558,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
         and SIMULATION_PARAMETERS["CALL_LAMBDA"] is not None
     ):
         raise Exception(
-            "LOAD_INPUT_DATA is True, but CALL_LAMBDA "
-            "is not None. Please make it None."
+            "LOAD_INPUT_DATA is True, but CALL_LAMBDA is not None. Please make it None."
         )
 
     if (
@@ -595,7 +576,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
     ):
         raise Exception(
             "The value of CALL_LAMBDA should be larger than "
-            f'0 but is {SIMULATION_PARAMETERS["CALL_LAMBDA"]}.'
+            f"0 but is {SIMULATION_PARAMETERS['CALL_LAMBDA']}."
         )
 
     if (
@@ -632,7 +613,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
         raise Exception(
             "The length of the AID_PARAMETERS is not equal to 4, "
             "but is "
-            f"{len(SIMULATION_PARAMETERS['AID_PARAMETERS'])}."
+            f"{len(SIMULATION_PARAMETERS['AID_PARAMETERS'])} (value={SIMULATION_PARAMETERS['AID_PARAMETERS']})."
         )
 
     if (
@@ -700,7 +681,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
         raise Exception(
             "The value of IDLE_USAGE should be equal to "
             "or larger than 0 but is "
-            f'{SIMULATION_PARAMETERS["IDLE_USAGE"]}.'
+            f"{SIMULATION_PARAMETERS['IDLE_USAGE']}."
         )
 
     if (
@@ -710,7 +691,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
         raise Exception(
             "The value of DRIVING_USAGE should be equal "
             "to or larger than "
-            f'0 but is {SIMULATION_PARAMETERS["DRIVING_USAGE"]}.'
+            f"0 but is {SIMULATION_PARAMETERS['DRIVING_USAGE']}."
         )
 
     if (
@@ -720,7 +701,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
         raise Exception(
             "The value of BATTERY_CAPACITY should be larger than"
             " 0 but is "
-            f'{SIMULATION_PARAMETERS["BATTERY_CAPACITY"]}.'
+            f"{SIMULATION_PARAMETERS['BATTERY_CAPACITY']}."
         )
 
     if (
@@ -803,9 +784,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
         SIMULATION_PARAMETERS["PROCESS_TYPE"] == "Time"
         or SIMULATION_PARAMETERS["PROCESS_TYPE"] == "Number"
     ):
-        raise Exception(
-            "The PROCESS_TYPE should be 'Time' or 'Number', but it is not."
-        )
+        raise Exception("The PROCESS_TYPE should be 'Time' or 'Number', but it is not.")
 
     if (
         SIMULATION_PARAMETERS["PROCESS_TYPE"] == "Time"
@@ -859,7 +838,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
         raise Exception(
             "The value of PROCESS_NUM_CALLS should be "
             "larger than 0 but is "
-            f'{SIMULATION_PARAMETERS["PROCESS_NUM_CALLS"]}.'
+            f"{SIMULATION_PARAMETERS['PROCESS_NUM_CALLS']}."
         )
 
     if (
@@ -868,7 +847,7 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
     ):
         raise Exception(
             "The value of PROCESS_TIME should be larger than "
-            f'0 but is {SIMULATION_PARAMETERS["PROCESS_TIME"]}.'
+            f"0 but is {SIMULATION_PARAMETERS['PROCESS_TIME']}."
         )
 
     if Path(
@@ -951,54 +930,57 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
             "will be overwritten if SAVE_OUTPUT is True."
         )
 
-    if (
-        SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel"
-        and SIMULATION_PARAMETERS["INTERVAL_CHECK_WP"] is not None
-    ):
-        raise Exception(
-            "The ENGINE_TYPE is 'diesel', but the "
-            "INTERVAL_CHECK_WP is not None. Please make it None."
-        )
-
-    if (
-        SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric"
-        and SIMULATION_PARAMETERS["INTERVAL_CHECK_WP"] is None
-    ):
-        raise Exception(
-            "The ENGINE_TYPE is 'electric', but the "
-            "INTERVAL_CHECK_WP is None. Please make it not None."
-        )
-
-    if (
-        SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric"
-        and SIMULATION_PARAMETERS["INTERVAL_CHECK_WP"] <= 0
-    ):
-        raise Exception(
-            "INTERVAL_CHECK_WP should be larger than 0, "
-            f"but is {SIMULATION_PARAMETERS['INTERVAL_CHECK_WP']}."
-        )
-
-    if (
-        SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric"
-        and SIMULATION_PARAMETERS["INTERVAL_CHECK_WP"] >= 20
-    ):
-        raise Exception(
-            "It is most realistic if INTERVAL_CHECK_WP is small, "
-            "but it has value "
-            f"{SIMULATION_PARAMETERS['INTERVAL_CHECK_WP']}. "
-            "Please make it smaller or change this input check if "
-            "you are really sure."
-        )
-
-    if (
-        SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel"
-        and SIMULATION_PARAMETERS["TIME_AFTER_LAST_ARRIVAL"] is not None
-    ):
-        raise Exception(
-            "The ENGINE_TYPE is 'diesel', but the "
-            "TIME_AFTER_LAST_ARRIVAL is not None. "
-            "Please make it None."
-        )
+    # Use the TIME_AFTER_LAST_ARRIVAL and INTERVAL_CHECK_WP check for all fuel types now so that
+    # we start processing the queue after meal breaks
+    #
+    # if (
+    #     SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel"
+    #     and SIMULATION_PARAMETERS["INTERVAL_CHECK_WP"] is not None
+    # ):
+    #     raise Exception(
+    #         "The ENGINE_TYPE is 'diesel', but the "
+    #         "INTERVAL_CHECK_WP is not None. Please make it None."
+    #     )
+    #
+    # if (
+    #     SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric"
+    #     and SIMULATION_PARAMETERS["INTERVAL_CHECK_WP"] is None
+    # ):
+    #     raise Exception(
+    #         "The ENGINE_TYPE is 'electric', but the "
+    #         "INTERVAL_CHECK_WP is None. Please make it not None."
+    #     )
+    #
+    # if (
+    #     SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric"
+    #     and SIMULATION_PARAMETERS["INTERVAL_CHECK_WP"] <= 0
+    # ):
+    #     raise Exception(
+    #         "INTERVAL_CHECK_WP should be larger than 0, "
+    #         f"but is {SIMULATION_PARAMETERS['INTERVAL_CHECK_WP']}."
+    #     )
+    #
+    # if (
+    #     SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric"
+    #     and SIMULATION_PARAMETERS["INTERVAL_CHECK_WP"] >= 20
+    # ):
+    #     raise Exception(
+    #         "It is most realistic if INTERVAL_CHECK_WP is small, "
+    #         "but it has value "
+    #         f"{SIMULATION_PARAMETERS['INTERVAL_CHECK_WP']}. "
+    #         "Please make it smaller or change this input check if "
+    #         "you are really sure."
+    #     )
+    #
+    # if (
+    #     SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel"
+    #     and SIMULATION_PARAMETERS["TIME_AFTER_LAST_ARRIVAL"] is not None
+    # ):
+    #     raise Exception(
+    #         "The ENGINE_TYPE is 'diesel', but the "
+    #         "TIME_AFTER_LAST_ARRIVAL is not None. "
+    #         "Please make it None."
+    #     )
 
     if (
         SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric"
@@ -1032,17 +1014,14 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
             f"{SIMULATION_PARAMETERS['FT_BOUNDARY']}."
         )
 
-    if (
-        SIMULATION_PARAMETERS["FT_BOUNDARY"]
-        <= SIMULATION_PARAMETERS["AT_BOUNDARY"]
-    ):
+    if SIMULATION_PARAMETERS["FT_BOUNDARY"] <= SIMULATION_PARAMETERS["AT_BOUNDARY"]:
         raise Exception(
             "FT_BOUNDARY is smaller or equal to AT_BOUNDARY. This "
             "is not possible. Please make FT_BOUNDARY larger than "
             "AT_BOUNDARY."
         )
 
-    if len(SIMULATION_PARAMETERS["DATA_COLUMNS_PATIENT"]) != 16:
+    if len(SIMULATION_PARAMETERS["DATA_COLUMNS_PATIENT"]) != 17:
         raise Exception(
             "The number of entries of DATA_COLUMNS_PATIENT is "
             "not equal to 16. Determine whether the correct "
@@ -1055,6 +1034,14 @@ def check_input_parameters(SIMULATION_PARAMETERS: dict[str, Any]) -> None:
             "not equal to 19. Determine whether the correct "
             "entries are provided."
         )
+
+    assert not SIMULATION_PARAMETERS["WITH_MEAL_BREAKS"] or (
+        SIMULATION_PARAMETERS["MEAL_BREAK_LOCATION"] in ["closest", "home"]
+    )
+    assert (
+        SIMULATION_PARAMETERS["CALL_CATEGORY_RATIOS"]
+        and sum(SIMULATION_PARAMETERS["CALL_CATEGORY_RATIOS"]) == 1
+    )
 
 
 def save_simulation_output(
@@ -1076,7 +1063,9 @@ def save_simulation_output(
 
     """
 
-    output_dataframe.to_csv(f"{directory}{file_name_output}_run_{run_nr}.csv")
+    output_dataframe.to_csv(
+        f"{directory}{file_name_output}_run_{run_nr}.csv", index=False
+    )
 
 
 def calculate_response_time_ecdf(df_patient):
@@ -1108,9 +1097,7 @@ def calculate_response_time_ecdf(df_patient):
     return df_patient
 
 
-def calculate_busy_fraction(
-    df_patient, SIMULATION_PARAMETERS: dict[str, Any]
-) -> float:
+def calculate_busy_fraction(df_patient, SIMULATION_PARAMETERS: dict[str, Any]) -> float:
     """
     Calculates the busy fraction of a simulation run.
 
@@ -1151,9 +1138,9 @@ def calculate_busy_fraction(
 
     # Case 1: patient is processed by ambulance completely within the interval
     # (AT_BOUNDARY, FT_BOUNDARY).
-    case_1 = (
-        df_patient["assignment_time"] >= SIMULATION_PARAMETERS["AT_BOUNDARY"]
-    ) & (df_patient["finish_time"] <= SIMULATION_PARAMETERS["FT_BOUNDARY"])
+    case_1 = (df_patient["assignment_time"] >= SIMULATION_PARAMETERS["AT_BOUNDARY"]) & (
+        df_patient["finish_time"] <= SIMULATION_PARAMETERS["FT_BOUNDARY"]
+    )
 
     busy_time += np.sum(
         (
@@ -1164,54 +1151,43 @@ def calculate_busy_fraction(
 
     # Case 2: the assignment time is before AT_BOUNDARY, the finish time before
     # FT_BOUNDARY but after AT_BOUNDARY.
-    case_2 = (
-        df_patient["assignment_time"] < SIMULATION_PARAMETERS["AT_BOUNDARY"]
-    ) & (
+    case_2 = (df_patient["assignment_time"] < SIMULATION_PARAMETERS["AT_BOUNDARY"]) & (
         (df_patient["finish_time"] > SIMULATION_PARAMETERS["AT_BOUNDARY"])
         & (df_patient["finish_time"] <= SIMULATION_PARAMETERS["FT_BOUNDARY"])
     )
 
     busy_time += np.sum(
-        df_patient.loc[case_2]["finish_time"]
-        - SIMULATION_PARAMETERS["AT_BOUNDARY"]
+        df_patient.loc[case_2]["finish_time"] - SIMULATION_PARAMETERS["AT_BOUNDARY"]
     )
 
     # Case 3: the assignment time is before AT_BOUNDARY, the finish time after
     # FT_BOUNDARY.
-    case_3 = (
-        df_patient["assignment_time"] < SIMULATION_PARAMETERS["AT_BOUNDARY"]
-    ) & (df_patient["finish_time"] > SIMULATION_PARAMETERS["FT_BOUNDARY"])
+    case_3 = (df_patient["assignment_time"] < SIMULATION_PARAMETERS["AT_BOUNDARY"]) & (
+        df_patient["finish_time"] > SIMULATION_PARAMETERS["FT_BOUNDARY"]
+    )
 
     busy_time += np.sum(case_3) * (
-        SIMULATION_PARAMETERS["FT_BOUNDARY"]
-        - SIMULATION_PARAMETERS["AT_BOUNDARY"]
+        SIMULATION_PARAMETERS["FT_BOUNDARY"] - SIMULATION_PARAMETERS["AT_BOUNDARY"]
     )
 
     # Case:4 the assignment time is after AT_BOUNDARY but before FT_BOUNDARY,
     # the finish time after FT_BOUNDARY.
     case_4 = (
         (df_patient["assignment_time"] >= SIMULATION_PARAMETERS["AT_BOUNDARY"])
-        & (
-            df_patient["assignment_time"]
-            < SIMULATION_PARAMETERS["FT_BOUNDARY"]
-        )
+        & (df_patient["assignment_time"] < SIMULATION_PARAMETERS["FT_BOUNDARY"])
     ) & (df_patient["finish_time"] > SIMULATION_PARAMETERS["FT_BOUNDARY"])
 
     busy_time += np.sum(
-        SIMULATION_PARAMETERS["FT_BOUNDARY"]
-        - df_patient.loc[case_4]["assignment_time"]
+        SIMULATION_PARAMETERS["FT_BOUNDARY"] - df_patient.loc[case_4]["assignment_time"]
     )
 
     total_time = (
-        SIMULATION_PARAMETERS["FT_BOUNDARY"]
-        - SIMULATION_PARAMETERS["AT_BOUNDARY"]
+        SIMULATION_PARAMETERS["FT_BOUNDARY"] - SIMULATION_PARAMETERS["AT_BOUNDARY"]
     ) * SIMULATION_PARAMETERS["NUM_AMBULANCES"]
 
     df_patient.drop(["assignment_time"], axis=1, inplace=True)
 
-    if not np.isin(
-        np.sum([case_1, case_2, case_3, case_4], axis=0), [0, 1]
-    ).all():
+    if not np.isin(np.sum([case_1, case_2, case_3, case_4], axis=0), [0, 1]).all():
         raise Exception(
             "Error: in the busy_fraction calculation, some data "
             "is considered more than once."
@@ -1259,9 +1235,7 @@ def simulation_statistics(
 
     # Patient output
 
-    print(
-        f"The average response time is: {np.mean(df_patient['response_time'])}."
-    )
+    print(f"The average response time is: {np.mean(df_patient['response_time'])}.")
     print(
         "The 95% empirical quantile of the response time is: "
         f"{np.min(df_patient.loc[df_patient['ecdf_rt'] >= 0.95]['response_time'])}."
@@ -1273,38 +1247,33 @@ def simulation_statistics(
 
     if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric":
         # Ambulance output
-        for key, value in dict(
-            df_ambulance["charging_type"].value_counts()
-        ).items():
-            print(
-                f"The charging type {key} had {value} occurrences in "
-                "df_ambulance."
-            )
+        for key, value in dict(df_ambulance["charging_type"].value_counts()).items():
+            print(f"The charging type {key} had {value} occurrences in df_ambulance.")
 
         print(
             "In total, "
-            f"{len(df_ambulance[df_ambulance['charging_success']==1])} "
+            f"{len(df_ambulance[df_ambulance['charging_success'] == 1])} "
             "charging sessions were successful, "
-            f"{len(df_ambulance[df_ambulance['charging_success']==0])} "
+            f"{len(df_ambulance[df_ambulance['charging_success'] == 0])} "
             "charging sessions were not succesful."
         )
 
         print(
             "In total, "
-            f"{len(df_ambulance[df_ambulance['charging_interrupted']==1])} "
+            f"{len(df_ambulance[df_ambulance['charging_interrupted'] == 1])} "
             "charging sessions were interrupted, "
-            f"{len(df_ambulance[df_ambulance['charging_interrupted']==0])} "
+            f"{len(df_ambulance[df_ambulance['charging_interrupted'] == 0])} "
             "charging sessions were not interrupted."
         )
 
         print(
             "The average charging time is: "
-            f"{round(np.nanmean(df_ambulance['charging_time']),5)}."
+            f"{round(np.nanmean(df_ambulance['charging_time']), 5)}."
         )
 
         print(
             "The average waiting time before a charger is assigned is: "
-            f"{round(np.nanmean(df_ambulance['waiting_time']),5)}."
+            f"{round(np.nanmean(df_ambulance['waiting_time']), 5)}."
         )
 
         print(
@@ -1314,5 +1283,5 @@ def simulation_statistics(
 
     print(
         "The simulation run running time was: "
-        f"{end_time_simulation-start_time_simulation}."
+        f"{end_time_simulation - start_time_simulation}."
     )

@@ -163,50 +163,50 @@ DATA_COLUMNS_PATIENT : list[str]
 DATA_COLUMNS_AMBULANCE : list[str]
     The columns for the ambulance DataFrame.
 """
-from typing import Any
 
+import copy
+import datetime
 import os
 import sys
-import copy
-import scipy
-import datetime
+from pathlib import Path
+from typing import Any, Literal
+
 import numpy as np
 import pandas as pd
-
+import scipy
+import yaml
 from ambulance_simulation import run_simulation
 from input_output_functions import (
-    print_parameters,
-    save_simulation_output,
-    simulation_statistics,
+    calculate_busy_fraction,
     calculate_response_time_ecdf,
     check_input_parameters,
+    print_parameters,
     save_input_parameters,
-    calculate_busy_fraction,
+    save_simulation_output,
+    simulation_statistics,
 )
 from plot_functions import (
+    hist_battery_increase_decrease,
     plot_battery_levels,
     plot_response_times,
-    hist_battery_increase_decrease,
 )
+from tqdm import tqdm
 
 ###################################Seed########################################
-START_SEED_VALUE: int | None = 110
+
 ################################Directories####################################
 ROOT_DIRECTORY: str = os.path.dirname(os.path.dirname(__file__))
-DATA_DIRECTORY: str = os.path.join(ROOT_DIRECTORY, "data/")
 SIMULATION_INPUT_DIRECTORY: str | None = None
 SIMULATION_OUTPUT_DIRECTORY: str = os.path.join(ROOT_DIRECTORY, "results/")
 #################################File names####################################
-TRAVEL_TIMES_FILE: str = "siren_driving_matrix_2022.csv"
-DISTANCE_FILE: str = "distance_matrix_2022.csv"
-NODES_FILE: str = "nodes_Utrecht_2021.csv"
-HOSPITAL_FILE: str = "Hospital_Postal_Codes_Utrecht_2021.csv"
-BASE_LOCATIONS_FILE: str = "RAVU_base_locations_Utrecht_2021.csv"
-AMBULANCE_BASE_LOCATIONS_FILE: str = (
-    "Base_Locations_Ambulances_MEXCLP_21_22_20.csv"
-)
-SCENARIO: str = "FB1_FH1"
-CHARGING_SCENARIO_FILE: str = f"charging_scenario_21_22_{SCENARIO}.csv"
+TRAVEL_TIMES_FILE: str = "TRAVEL_TIMES_FILE.csv"
+DISTANCE_FILE: str = "DISTANCE_FILE.csv"
+NODES_FILE: str = "NODES_FILE.csv"
+HOSPITAL_FILE: str = "HOSPITAL_FILE.csv"
+BASE_LOCATIONS_FILE: str = "BASE_LOCATIONS_FILE.csv"
+AMBULANCE_BASE_LOCATIONS_FILE: str = "AMBULANCE_BASE_LOCATIONS_FILE.csv"
+SCENARIO: str = "Diesel"
+CHARGING_SCENARIO_FILE: str = f"../../../charging_scenario_21_22_{SCENARIO}.csv"
 SIMULATION_PATIENT_OUTPUT_FILE_NAME: str = f"Patient_df_{SCENARIO}"
 SIMULATION_AMBULANCE_OUTPUT_FILE_NAME: str = f"Ambulance_df_{SCENARIO}"
 
@@ -224,19 +224,11 @@ ON_SITE_AID_TIMES_FILE: str | None = None
 DROP_OFF_TIMES_FILE: str | None = None
 LOCATION_IDS_FILE: str | None = None
 TO_HOSPITAL_FILE: str | None = None
+
 ############################Simulation parameters##############################
-NUM_RUNS: int = 1
-PROCESS_TYPE: str = "Time"
-PROCESS_NUM_CALLS: int | None = None
-PROCESS_TIME: float | None = 720
-NUM_AMBULANCES: int = 20
-PROB_GO_TO_HOSPITAL: float | None = 0.6300
-CALL_LAMBDA: float | None = 1 / 7.75
-AID_PARAMETERS: list[float | int] = [0.38, -10.01, 37.00, 88]
-DROP_OFF_PARAMETERS: list[float | int] | None = [0.39, -8.25, 35.89, 88]
-ENGINE_TYPE: str = "electric"
-IDLE_USAGE: float | None = 5  # kW
-DRIVING_USAGE: float | None = 0.4  # kWh/km
+ENGINE_TYPE: str = "diesel"
+IDLE_USAGE: float | None = None  # kW
+DRIVING_USAGE: float | None = None  # kWh/km
 BATTERY_CAPACITY: float
 if ENGINE_TYPE == "electric":
     BATTERY_CAPACITY = 150.0
@@ -245,19 +237,23 @@ else:
 NO_SIREN_PENALTY: float = 0.95
 LOAD_INPUT_DATA: bool = False
 CRN_GENERATOR: str | None = "Generator"
-INTERVAL_CHECK_WP: float | None = 1
-TIME_AFTER_LAST_ARRIVAL: float | None = 100
+
+# Check to see if we can serve queued patients every 2 minutes
+# This used to be Electric specific
+INTERVAL_CHECK_WP: float | None = 2
+TIME_AFTER_LAST_ARRIVAL: float | None = 2
+
 AT_BOUNDARY: float = 60.0
 FT_BOUNDARY: float = 720.0
 ##############################Output Parameters################################
 PRINT: bool = False
-PRINT_STATISTICS: bool = False
+PRINT_STATISTICS: bool = True
 PLOT_FIGURES: bool = False
 
 SAVE_PRINTS_TXT: bool = False
-SAVE_OUTPUT: bool = False
+SAVE_OUTPUT: bool = True
 SAVE_PLOTS: bool = False
-SAVE_DFS: bool = False
+SAVE_DFS: bool = True
 
 DATA_COLUMNS_PATIENT: list["str"] = [
     "patient_ID",
@@ -276,6 +272,7 @@ DATA_COLUMNS_PATIENT: list["str"] = [
     "driving_time_to_hospital",
     "drop_off_time_hospital",
     "finish_time",
+    "category",
 ]
 DATA_COLUMNS_AMBULANCE: list["str"] = [
     "ambulance_ID",
@@ -299,17 +296,7 @@ DATA_COLUMNS_AMBULANCE: list["str"] = [
     "battery_increase",
 ]
 ###################################Initialization##############################
-SIMULATION_PARAMETERS: dict[str, Any] = {
-    "START_SEED_VALUE": START_SEED_VALUE,
-    "NUM_RUNS": NUM_RUNS,
-    "PROCESS_TYPE": PROCESS_TYPE,
-    "PROCESS_NUM_CALLS": PROCESS_NUM_CALLS,
-    "PROCESS_TIME": PROCESS_TIME,
-    "NUM_AMBULANCES": NUM_AMBULANCES,
-    "PROB_GO_TO_HOSPITAL": PROB_GO_TO_HOSPITAL,
-    "CALL_LAMBDA": CALL_LAMBDA,
-    "AID_PARAMETERS": AID_PARAMETERS,
-    "DROP_OFF_PARAMETERS": DROP_OFF_PARAMETERS,
+BASE_SIMULATION_PARAMETERS: dict[str, Any] = {
     "ENGINE_TYPE": ENGINE_TYPE,
     "IDLE_USAGE": IDLE_USAGE,
     "DRIVING_USAGE": DRIVING_USAGE,
@@ -329,7 +316,6 @@ SIMULATION_PARAMETERS: dict[str, Any] = {
     "SIMULATION_PATIENT_OUTPUT_FILE_NAME": SIMULATION_PATIENT_OUTPUT_FILE_NAME,
     "SIMULATION_AMBULANCE_OUTPUT_FILE_NAME": SIMULATION_AMBULANCE_OUTPUT_FILE_NAME,
     "SIMULATION_OUTPUT_DIRECTORY": SIMULATION_OUTPUT_DIRECTORY,
-    "DATA_DIRECTORY": DATA_DIRECTORY,
     "SIMULATION_INPUT_DIRECTORY": SIMULATION_INPUT_DIRECTORY,
     "SAVE_OUTPUT": SAVE_OUTPUT,
     "LOAD_INPUT_DATA": LOAD_INPUT_DATA,
@@ -359,8 +345,34 @@ SIMULATION_DATA: dict[str, Any] = {
     "DATA_COLUMNS_PATIENT": DATA_COLUMNS_PATIENT,
     "DATA_COLUMNS_AMBULANCE": DATA_COLUMNS_AMBULANCE,
 }
+
+
 ####################################Run########################################
-if __name__ == "__main__":
+def run(config_file: Path):
+
+    # read yaml
+    with open(config_file, "rt") as f:
+        yaml_config = yaml.safe_load(f)
+
+    # Set Simulation Parameters from the yaml (with can also override the base if necessary)
+    SIMULATION_PARAMETERS = BASE_SIMULATION_PARAMETERS | yaml_config
+
+    # Set the number of ambulances based on the file so that parameter doesn't have to be
+    # kept in sync manually.
+    SIMULATION_PARAMETERS["NUM_AMBULANCES"] = pd.read_csv(
+        f"{SIMULATION_PARAMETERS['DATA_DIRECTORY']}"
+        f"{SIMULATION_PARAMETERS['AMBULANCE_BASE_LOCATIONS_FILE']}",
+        index_col=0,
+    ).shape[0]
+
+    if SIMULATION_PARAMETERS["PROCESS_TYPE"] == "Time":
+        SIMULATION_PARAMETERS["PROCESS_NUM_CALLS"] = None
+    else:
+        raise Exception("Parameter file loading does not support PROCESS_TYPE != Time")
+
+    # Extract NUM_RUNS for use here
+    NUM_RUNS = SIMULATION_PARAMETERS["NUM_RUNS"]
+
     start_time_script = datetime.datetime.now()
 
     copy_simulation_parameters = copy.deepcopy(SIMULATION_PARAMETERS)
@@ -383,16 +395,21 @@ if __name__ == "__main__":
     busy_fractions: np.ndarray = np.zeros(NUM_RUNS)
     running_times: np.ndarray = np.zeros(NUM_RUNS)
 
-    for run_nr in range(NUM_RUNS):
-        print(f"Run nr: {run_nr}.")
-
-        if not SIMULATION_PARAMETERS["LOAD_INPUT_DATA"]:
-            SIMULATION_PARAMETERS["SEED_VALUE"] = (
-                SIMULATION_PARAMETERS["START_SEED_VALUE"] + run_nr
-            )
-
+    for run_nr in tqdm(range(NUM_RUNS)):
         start_time_simulation_run = datetime.datetime.now()
-        run_simulation(SIMULATION_PARAMETERS, SIMULATION_DATA)
+        try:
+            if not SIMULATION_PARAMETERS["LOAD_INPUT_DATA"]:
+                SIMULATION_PARAMETERS["SEED_VALUE"] = (
+                    SIMULATION_PARAMETERS["START_SEED_VALUE"] + run_nr
+                )
+
+            run_simulation(SIMULATION_PARAMETERS, SIMULATION_DATA)
+        except Exception as e:
+            if NUM_RUNS > 1:
+                print(f"Run {run_nr} failed to serve all patients!")
+            else:
+                raise e
+
         end_time_simulation_run = datetime.datetime.now()
         running_times[run_nr] = (
             end_time_simulation_run - start_time_simulation_run
@@ -411,7 +428,7 @@ if __name__ == "__main__":
         )
         print(
             "The running time for creating the dfs is: "
-            f"{datetime.datetime.now()-start_time_df}."
+            f"{datetime.datetime.now() - start_time_df}."
         )
 
         # Plot simulation output
@@ -419,9 +436,7 @@ if __name__ == "__main__":
         if SIMULATION_PARAMETERS["PLOT_FIGURES"]:
             plot_response_times(df_patient, run_nr, SIMULATION_PARAMETERS)
             if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric":
-                plot_battery_levels(
-                    df_ambulance, run_nr, SIMULATION_PARAMETERS
-                )
+                plot_battery_levels(df_ambulance, run_nr, SIMULATION_PARAMETERS)
                 hist_battery_increase_decrease(
                     df_ambulance, run_nr, SIMULATION_PARAMETERS
                 )
@@ -437,7 +452,7 @@ if __name__ == "__main__":
         print(
             "The running time for creating the plots and printing the "
             "simulation stats is: "
-            f"{datetime.datetime.now()-start_time_plots_stats}."
+            f"{datetime.datetime.now() - start_time_plots_stats}."
         )
 
         # Save simulation output
@@ -455,9 +470,29 @@ if __name__ == "__main__":
                 df_ambulance,
                 run_nr,
             )
+            save_simulation_output(
+                SIMULATION_PARAMETERS["SIMULATION_OUTPUT_DIRECTORY"],
+                "meal_breaks",
+                pd.DataFrame(
+                    SIMULATION_DATA["output_breaks"],
+                    columns=[
+                        "Ambulance_ID",
+                        "meal_break_drive_start",
+                        "meal_break_drive_end",
+                        "meal_break_end",
+                    ],
+                ),
+                run_nr,
+            )
+            save_simulation_output(
+                SIMULATION_PARAMETERS["SIMULATION_OUTPUT_DIRECTORY"],
+                "state",
+                pd.DataFrame.from_records(SIMULATION_DATA["output_state"]),
+                run_nr,
+            )
             print(
                 "The running time for saving the data is: "
-                f"{datetime.datetime.now()-start_time_saving}."
+                f"{datetime.datetime.now() - start_time_saving}."
             )
 
         mean_response_times[run_nr] = np.mean(df_patient["response_time"])
@@ -473,18 +508,15 @@ if __name__ == "__main__":
     m_busy_fractions = np.mean(busy_fractions)
 
     print("\nAll runs finished")
-    print(
-        "The mean mean response time over "
-        f"all runs is: {m_mean_response_times}."
-    )
+    print(f"The mean mean response time over all runs is: {m_mean_response_times}.")
     if NUM_RUNS > 1:
-        CI_error_m_mean_response_times = scipy.stats.t.ppf(
-            0.975, NUM_RUNS - 1
-        ) * (np.std(mean_response_times, ddof=1) / np.sqrt(NUM_RUNS))
+        CI_error_m_mean_response_times = scipy.stats.t.ppf(0.975, NUM_RUNS - 1) * (
+            np.std(mean_response_times, ddof=1) / np.sqrt(NUM_RUNS)
+        )
         print(
             "The 95% CI of the mean mean response time is:"
-            f"({m_mean_response_times-CI_error_m_mean_response_times},"
-            f"{m_mean_response_times+CI_error_m_mean_response_times})."
+            f"({m_mean_response_times - CI_error_m_mean_response_times},"
+            f"{m_mean_response_times + CI_error_m_mean_response_times})."
         )
 
     print(
@@ -497,8 +529,8 @@ if __name__ == "__main__":
         ) * (np.std(emp_quantile_response_times, ddof=1) / np.sqrt(NUM_RUNS))
         print(
             "The 95% CI of the mean 95% empirical quantile of the response time is:"
-            f"({m_emp_quantile_response_times-CI_error_m_emp_quantile_response_times},"
-            f"{m_emp_quantile_response_times+CI_error_m_emp_quantile_response_times})."
+            f"({m_emp_quantile_response_times - CI_error_m_emp_quantile_response_times},"
+            f"{m_emp_quantile_response_times + CI_error_m_emp_quantile_response_times})."
         )
 
     print(f"The mean busy fraction over all runs is: {m_busy_fractions}.")
@@ -508,8 +540,8 @@ if __name__ == "__main__":
         )
         print(
             "The 95% CI of the mean busy fraction is:"
-            f"({m_busy_fractions-CI_error_m_busy_fractions},"
-            f"{m_busy_fractions+CI_error_m_busy_fractions})."
+            f"({m_busy_fractions - CI_error_m_busy_fractions},"
+            f"{m_busy_fractions + CI_error_m_busy_fractions})."
         )
 
     if SIMULATION_PARAMETERS["SAVE_OUTPUT"]:
@@ -544,6 +576,16 @@ if __name__ == "__main__":
 
     print(
         "\nRunning the complete main.py script takes: "
-        f"{datetime.datetime.now()-start_time_script}."
+        f"{datetime.datetime.now() - start_time_script}."
     )
     print("\007")
+
+
+if __name__ == "__main__":
+    import shutil
+    import sys
+
+    config_path = Path(sys.argv[-1])
+    assert config_path.is_file, "config file not found"
+    run(config_path)
+    shutil.copy(config_path, "./results/")

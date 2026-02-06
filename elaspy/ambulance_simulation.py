@@ -2,19 +2,20 @@
 # -*- coding: utf-8 -*-
 
 import copy
-import simpy as sp
-import numpy as np
-import pandas as pd
-import numpy.random as rnd
+import heapq
+from collections import Counter
+from typing import Any, List, Tuple
 
-from typing import Any
+import numpy as np
+import numpy.random as rnd
+import pandas as pd
+import simpy as sp
 from ambulance import Ambulance
-from patient import Patient
-from collections import deque
 from coordinate_methods import (
     calculate_new_coordinate,
     select_closest_location_ID,
 )
+from patient import Patient
 
 
 def initialize_simulation(
@@ -26,7 +27,7 @@ def initialize_simulation(
     dict[str, dict[str, list[sp.resources.resource.Resource | float]]],
     sp.core.Environment,
     np.ndarray,
-    deque,
+    list,
 ]:
     """
     Initializes all data and required objects of the simulation.
@@ -80,7 +81,7 @@ def initialize_simulation(
     to_hospital_bool : np.ndarray
         Specifies for each patient whether transportation to the hospital is
         required or not.
-    patient_queue : collections.deque
+    patient_queue : list
         The patient queue.
 
     """
@@ -178,11 +179,8 @@ def initialize_simulation(
             .flatten()
         )
 
-        SIMULATION_PARAMETERS["NUM_CALLS"] = SIMULATION_PARAMETERS[
-            "PROCESS_NUM_CALLS"
-        ]
+        SIMULATION_PARAMETERS["NUM_CALLS"] = SIMULATION_PARAMETERS["PROCESS_NUM_CALLS"]
     else:
-
         rng: rnd._generator.Generator | rnd.mtrand.RandomState
 
         if SIMULATION_PARAMETERS["CRN_GENERATOR"] == "RandomState":
@@ -190,9 +188,7 @@ def initialize_simulation(
         elif SIMULATION_PARAMETERS["CRN_GENERATOR"] == "Generator":
             rng = rnd.default_rng(SIMULATION_PARAMETERS["SEED_VALUE"])
         else:
-            raise Exception(
-                "Invalid CRN_GENERATOR specified. Please change it."
-            )
+            raise Exception("Invalid CRN_GENERATOR specified. Please change it.")
 
         if SIMULATION_PARAMETERS["PROCESS_TYPE"] == "Number":
             interarrival_times = rng.exponential(
@@ -217,6 +213,17 @@ def initialize_simulation(
                 " smaller or equal to 0. Please make a change."
             )
 
+        # Assign Categories to each call
+        call_category_ratios = SIMULATION_PARAMETERS.get("CALL_CATEGORY_RATIOS", None)
+        if call_category_ratios:
+            call_category = rng.choice(
+                a=np.arange(1, len(call_category_ratios) + 1, 1, dtype=int),
+                size=SIMULATION_PARAMETERS["NUM_CALLS"],
+                p=call_category_ratios,
+            )
+        else:
+            call_category = np.ones(SIMULATION_PARAMETERS["NUM_CALLS"])
+
         on_site_aid_times = generate_service_times(
             SIMULATION_PARAMETERS["AID_PARAMETERS"][0],
             SIMULATION_PARAMETERS["AID_PARAMETERS"][1],
@@ -234,9 +241,7 @@ def initialize_simulation(
             SIMULATION_PARAMETERS["DROP_OFF_PARAMETERS"][3],
         )
 
-        location_IDs = location_generator(
-            rng, SIMULATION_PARAMETERS, SIMULATION_DATA
-        )
+        location_IDs = location_generator(rng, SIMULATION_PARAMETERS, SIMULATION_DATA)
         to_hospital_bool = (
             rng.uniform(0, 1, size=SIMULATION_PARAMETERS["NUM_CALLS"])
             < SIMULATION_PARAMETERS["PROB_GO_TO_HOSPITAL"]
@@ -244,11 +249,10 @@ def initialize_simulation(
 
     simulation_times = {
         "interarrival": interarrival_times,
+        "category": call_category,  # Not strictly a time but...
         "on_site": on_site_aid_times,
         "drop_off": drop_off_times,
     }
-
-    print(f"NUM_CALLS: {SIMULATION_PARAMETERS['NUM_CALLS']}.")
 
     output_patient = np.full(
         (
@@ -264,16 +268,15 @@ def initialize_simulation(
     SIMULATION_DATA["output_patient"] = output_patient
     SIMULATION_DATA["output_ambulance"] = output_ambulance
     SIMULATION_DATA["nr_times_no_fast_no_regular_available"] = 0
+    SIMULATION_DATA["output_breaks"] = []
 
     SIMULATION_DATA["TIME_LAST_ARRIVAL"] = np.inf
 
     env = sp.Environment()
-    ambulances = ambulance_initialization(
-        env, SIMULATION_PARAMETERS, SIMULATION_DATA
-    )
+    ambulances = ambulance_initialization(env, SIMULATION_PARAMETERS, SIMULATION_DATA)
     charging_stations = charging_stations_initialization(env, SIMULATION_DATA)
 
-    patient_queue: deque = deque()
+    patient_queue = []
 
     return (
         location_IDs,
@@ -328,9 +331,7 @@ def generate_service_times(
     for i in np.arange(size):
         service_time = rng.lognormal(mean=np.log(scale), sigma=s, size=1) + loc
         while (service_time < 0) or (service_time > CUT_OFF):
-            service_time = (
-                rng.lognormal(mean=np.log(scale), sigma=s, size=1) + loc
-            )
+            service_time = rng.lognormal(mean=np.log(scale), sigma=s, size=1) + loc
         service_times[i] = service_time
 
     return service_times
@@ -438,7 +439,11 @@ def run_simulation(
         )
     )
 
-    if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric":
+    #    if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric":
+    # Enable this for both fuel types - so that ambulances that end their meal break
+    # when there is a queue will start servicing the patients from the queue rather than
+    # waiting until they're assigned a new incoming patient
+    if True:
         env.process(
             help_waiting_patients(
                 env,
@@ -451,6 +456,13 @@ def run_simulation(
                 SIMULATION_DATA,
             )
         )
+
+    # Start the state recorder process
+    env.process(
+        state_recorder(
+            env, SIMULATION_DATA, SIMULATION_PARAMETERS, ambulances, patient_queue
+        )
+    )
 
     env.run()
     if len(patient_queue) != 0:
@@ -465,6 +477,8 @@ def run_simulation(
             "output_patient",
             "nr_times_no_fast_no_regular_available",
             "TIME_LAST_ARRIVAL",
+            "output_breaks",
+            "output_state",
         ]:
             # These objects are changed in the simulation.
             pass
@@ -480,6 +494,69 @@ def run_simulation(
                 "The SIMULATION_DATA were altered during "
                 "the simulation. This should not happen. Error."
             )
+
+
+def state_recorder(
+    env, SIMULATION_DATA, SIMULATION_PARAMETERS, ambulances, patient_queue
+):
+    rows = []
+
+    # For each minute when we're still adding patients, or we're processing the
+    # residual queue record the state of the system for later charting
+    while (
+        env.now
+        < (
+            SIMULATION_DATA["TIME_LAST_ARRIVAL"]
+            + SIMULATION_PARAMETERS["TIME_AFTER_LAST_ARRIVAL"]
+        )
+    ) or patient_queue:
+        ambulance_states = {
+            "amb_with_patient": 0,
+            "amb_meal_break": 0,
+            "amb_before_shift": 0,
+            "amb_after_shift": 0,
+            "amb_available": 0,
+        }
+
+        for j in range(len(ambulances)):
+            if ambulances[j].helps_patient or ambulances[j].assigned_to_patient:
+                ambulance_states["amb_with_patient"] += 1
+                continue
+
+            if ambulances[j].in_meal_break:
+                ambulance_states["amb_meal_break"] += 1
+                continue
+
+            if env.now < ambulances[j].shift_start_time:
+                ambulance_states["amb_before_shift"] += 1
+                continue
+
+            if env.now > ambulances[j].shift_end_time:
+                ambulance_states["amb_after_shift"] += 1
+                continue
+
+            ambulance_states["amb_available"] += 1
+
+        if (
+            ambulance_states["amb_after_shift"]
+            == SIMULATION_PARAMETERS["NUM_AMBULANCES"]
+        ):
+            # No ambulances will change state after this point - break out
+            break
+
+        queue_state = {
+            f"cat{i + 1}_queue": 0
+            for i in range(len(SIMULATION_PARAMETERS.get("CALL_CATEGORY_RATIOS", [1])))
+        }
+        queue_state["total_queue"] = len(patient_queue)
+        for p in patient_queue:
+            queue_state[f"cat{p.category}_queue"] += 1
+
+        rows.append({"time": env.now} | ambulance_states | queue_state)
+
+        yield env.timeout(1)
+
+    SIMULATION_DATA["output_state"] = rows
 
 
 def charging_stations_initialization(
@@ -517,20 +594,15 @@ def charging_stations_initialization(
                 row["Number of fast chargers"] != 0
                 or row["Number of regular chargers"] != 0
             ):
-
                 charging_stations_hospitals[f"{index[:-1]}"] = [
                     (
-                        sp.Resource(
-                            env, capacity=row["Number of fast chargers"]
-                        )
+                        sp.Resource(env, capacity=row["Number of fast chargers"])
                         if row["Number of fast chargers"] != 0
                         else np.nan
                     ),
                     row["Speed fast chargers (kW)"],
                     (
-                        sp.Resource(
-                            env, capacity=row["Number of regular chargers"]
-                        )
+                        sp.Resource(env, capacity=row["Number of regular chargers"])
                         if row["Number of regular chargers"] != 0
                         else np.nan
                     ),
@@ -545,9 +617,7 @@ def charging_stations_initialization(
                 ),
                 row["Speed fast chargers (kW)"],
                 (
-                    sp.Resource(
-                        env, capacity=row["Number of regular chargers"]
-                    )
+                    sp.Resource(env, capacity=row["Number of regular chargers"])
                     if row["Number of regular chargers"] != 0
                     else np.nan
                 ),
@@ -555,8 +625,7 @@ def charging_stations_initialization(
             ]
         else:
             raise Exception(
-                f"Index {index} lacks the location type "
-                "('H' or 'B'). Exit code."
+                f"Index {index} lacks the location type ('H' or 'B'). Exit code."
             )
 
     return {
@@ -592,17 +661,89 @@ def ambulance_initialization(
         A list of initialized ambulances.
 
     """
+    ambulances = []
 
-    return [
-        Ambulance(
+    if SIMULATION_PARAMETERS["WITH_MEAL_BREAKS"]:
+        # Here we define some closures can can be inserted in the Ambulance object
+        # which will allow the ambulances to check if they are able to take a break
+        # or not.  Using closures means we do not have to share the entire list
+        # of ambulances with each ambulance just for this check.
+
+        # Define a simple meal break policy where a maximum number of ambulances are
+        # allowed on break at any one time as defined by the MAX_ON_BREAK parameter
+        # with an exception for any ambulances that are out of their planned break
+        # period.
+        def mb_policy_func(this_amb) -> bool:
+
+            if env.now > this_amb.meal_break_end:
+                if SIMULATION_PARAMETERS["PRINT"]:
+                    print(
+                        f"{env.now}: Ambulance {this_amb.ambulance_ID} is after it's meal break window - skipping policy to allow break"
+                    )
+                return True
+
+            on_break_count = sum(a.in_meal_break for a in ambulances)
+
+            if SIMULATION_PARAMETERS["PRINT"]:
+                print(
+                    f"{env.now}: meal break policy check has on_break_count = {on_break_count}"
+                )
+
+            return on_break_count < SIMULATION_PARAMETERS["MAX_ON_BREAK"]
+    else:
+
+        def mb_policy_func(_):
+            assert False, (
+                "This function should not be called without meal breaks enabled"
+            )
+
+    for i in range(SIMULATION_PARAMETERS["NUM_AMBULANCES"]):
+        a = Ambulance(
             env,
-            int(SIMULATION_DATA["AMBULANCE_BASE_LOCATIONS"].loc[i]),
+            int(SIMULATION_DATA["AMBULANCE_BASE_LOCATIONS"].loc[i]["Base"]),
             SIMULATION_PARAMETERS["ENGINE_TYPE"],
             i,
             SIMULATION_PARAMETERS["BATTERY_CAPACITY"],
+            SIMULATION_DATA["AMBULANCE_BASE_LOCATIONS"].loc[i],
+            mb_policy_func,
         )
-        for i in range(SIMULATION_PARAMETERS["NUM_AMBULANCES"])
-    ]
+        ambulances.append(a)
+
+        # Schedule a check at the start of the break window to see if this ambulance is available
+        # and if it is - then we should trigger the break.  The scenario where the ambulance is
+        # busy at this time is dealt with in the `Ambulance.process_patient` function.
+        if SIMULATION_PARAMETERS["WITH_MEAL_BREAKS"]:
+
+            def available_mb_trigger(env, amb):
+
+                if amb.had_meal_break or amb.in_meal_break:
+                    return  # end the check
+
+                if amb.assigned_to_patient:
+                    # Ambulance is busy so no action this time around - check again in 2 mins
+                    sp.util.start_delayed(env, available_mb_trigger(env, amb), 2)
+                    return
+
+                if not amb.mb_allowed_by_policy(amb):
+                    # We should go on a break, but we can't because it's not allowed by policy - retry in 2 mins
+                    print(
+                        f"{env.now}: Cannot start a meal break for ambulance {amb.ambulance_ID} as it is blocked by policy"
+                    )
+                    sp.util.start_delayed(env, available_mb_trigger(env, amb), 2)
+                    return
+
+                # If there are no blockers we can run the actual meal break
+                yield env.process(
+                    amb.check_meal_break(SIMULATION_DATA, SIMULATION_PARAMETERS)
+                )
+
+            sp.util.start_delayed(
+                env,
+                available_mb_trigger(env, a),
+                a.meal_break_start,
+            )
+
+    return ambulances
 
 
 def patient_generator(
@@ -614,7 +755,7 @@ def patient_generator(
     location_IDs: np.ndarray,
     simulation_times: dict[str, np.ndarray],
     to_hospital_bool: np.ndarray,
-    patient_queue: deque,
+    patient_queue: list,
     SIMULATION_PARAMETERS: dict[str, Any],
     SIMULATION_DATA: dict[str, Any],
 ):
@@ -644,7 +785,7 @@ def patient_generator(
     to_hospital_bool : np.ndarray
         Specifies for each patient whether transportation to the hospital is
         required or not.
-    patient_queue : collections.deque
+    patient_queue : list
         The patient queue.
     SIMULATION_PARAMETERS : dict[str, Any]
         The simulation parameters. The parameters ``NUM_CALLS`` and ``PRINT``
@@ -664,11 +805,14 @@ def patient_generator(
 
         patient_ID = i
         patient_location_ID = location_IDs[i]
+        patient_category = simulation_times["category"][i]
 
         hospital_location_ID, new_patient = patient_arrival(
             env,
             patient_ID,
             patient_location_ID,
+            patient_category,
+            to_hospital_bool[patient_ID],
             patient_queue,
             SIMULATION_PARAMETERS,
             SIMULATION_DATA,
@@ -685,16 +829,13 @@ def patient_generator(
 
         if PATIENT_ASSIGNED:
             if SIMULATION_PARAMETERS["PRINT"]:
-                print(
-                    f"Remove patient {patient_ID} from the deque "
-                    f"{patient_queue}."
-                )
+                print(f"Remove patient {patient_ID} from the deque {patient_queue}.")
             patient_queue.remove(new_patient)
             # set_assigned_to_patient necessary for correctly working
             # while and for-loops help_waiting_patients().
             ambulances[ambulance_ID].set_assigned_to_patient()
             if SIMULATION_PARAMETERS["PRINT"]:
-                print(f"After removal the deque is {patient_queue}.")
+                print(f"After removal the queue is {patient_queue}.")
             env.process(
                 ambulance_aid_process(
                     env,
@@ -710,16 +851,18 @@ def patient_generator(
             )
         else:
             if SIMULATION_PARAMETERS["PRINT"]:
+                patient_queue_summary = dict(
+                    Counter([f"Cat{x.category}" for x in patient_queue])
+                )
                 print(
                     f"Patient {new_patient.patient_ID} cannot be helped by an "
-                    f"ambulance. The deque is {patient_queue}."
+                    f"ambulance. The queue is {patient_queue_summary}."
                 )
 
     SIMULATION_DATA["TIME_LAST_ARRIVAL"] = env.now
     if SIMULATION_PARAMETERS["PRINT"]:
         print(
-            "All patients have arrived at time "
-            f"{SIMULATION_DATA['TIME_LAST_ARRIVAL']}."
+            f"All patients have arrived at time {SIMULATION_DATA['TIME_LAST_ARRIVAL']}."
         )
 
 
@@ -753,9 +896,7 @@ def location_generator(
 
     """
 
-    location_uniforms = rng.uniform(
-        0, 1, size=SIMULATION_PARAMETERS["NUM_CALLS"]
-    )
+    location_uniforms = rng.uniform(0, 1, size=SIMULATION_PARAMETERS["NUM_CALLS"])
     location_IDs = np.zeros(SIMULATION_PARAMETERS["NUM_CALLS"], dtype=int)
 
     for i in range(SIMULATION_PARAMETERS["NUM_CALLS"]):
@@ -777,7 +918,9 @@ def patient_arrival(
     env: sp.core.Environment,
     patient_ID: int,
     patient_location_ID: int,
-    patient_queue: deque,
+    patient_category: int,
+    to_hospital: bool,
+    patient_queue: list,
     SIMULATION_PARAMETERS: dict[str, Any],
     SIMULATION_DATA: dict[str, Any],
 ) -> tuple[int, Patient]:
@@ -796,7 +939,7 @@ def patient_arrival(
         The patient ID.
     patient_location_ID : int
         The arrival location of the patient.
-    patient_queue : deque
+    patient_queue : list
         The patient queue.
     SIMULATION_PARAMETERS : dict[str, Any]
         The simulation parameters. The parameter ``PRINT`` is at least
@@ -824,6 +967,7 @@ def patient_arrival(
     SIMULATION_DATA["output_patient"][patient_ID, 0] = patient_ID
     SIMULATION_DATA["output_patient"][patient_ID, 2] = arrival_time_patient
     SIMULATION_DATA["output_patient"][patient_ID, 3] = patient_location_ID
+    SIMULATION_DATA["output_patient"][patient_ID, 16] = patient_category
 
     hospital_location_ID = select_hospital(
         patient_location_ID, SIMULATION_PARAMETERS, SIMULATION_DATA
@@ -834,13 +978,18 @@ def patient_arrival(
         arrival_time_patient,
         patient_location_ID,
         hospital_location_ID,
+        patient_category,
+        to_hospital,
     )
 
     patient_queue.append(new_patient)
+    if len(patient_queue) > 1:
+        patient_queue.sort(key=lambda p: (p.category, p.arrival_time, p))
+
     if SIMULATION_PARAMETERS["PRINT"]:
         print(
             f"In patient_arrival, patient {new_patient.patient_ID} is"
-            f" added to the deque. The deque is {patient_queue}."
+            f" added to the queue. The queue is {patient_queue}."
         )
 
     return hospital_location_ID, new_patient
@@ -854,7 +1003,7 @@ def help_waiting_patients(
     ],
     simulation_times: dict[str, np.ndarray],
     to_hospital_bool: np.ndarray,
-    patient_queue: deque,
+    patient_queue: list,
     SIMULATION_PARAMETERS: dict[str, Any],
     SIMULATION_DATA: dict[str, Any],
 ):
@@ -877,7 +1026,7 @@ def help_waiting_patients(
     to_hospital_bool : np.ndarray
         Specifies for each patient whether transportation to the hospital is
         required or not.
-    patient_queue : deque
+    patient_queue : list
         The patient queue.
     SIMULATION_PARAMETERS : dict[str, Any]
         The simulation parameters. The parameters ``TIME_AFTER_LAST_ARRIVAL``,
@@ -894,15 +1043,95 @@ def help_waiting_patients(
         SIMULATION_DATA["TIME_LAST_ARRIVAL"]
         + SIMULATION_PARAMETERS["TIME_AFTER_LAST_ARRIVAL"]
     ):
-        if SIMULATION_PARAMETERS["PRINT"]:
-            print(f"\n{env.now}: check for waiting patients.")
-        while len(patient_queue) > 0:
-            wp_counter = 0
+        if SIMULATION_PARAMETERS["WITH_EN_ROUTE_REASSIGNMENT"]:
             if SIMULATION_PARAMETERS["PRINT"]:
                 print(
-                    "There are waiting patients. "
-                    f"The waiting patient queue is {patient_queue}."
+                    f"{env.now}: Starting to check if it's possible to replace any ambulances currently driving to patients with newly available ones."
                 )
+
+            # New Check - can an available ambulance be subed for on on the way to a patient
+            # Sort into category priority order.
+            ambs_on_route = [a for a in ambulances if hasattr(a, "scene_arrival_time")]
+            ambs_on_route.sort(
+                key=lambda a: (
+                    a.patient.category,
+                    a.patient.arrival_time,
+                    a.ambulance_ID,
+                )
+            )
+
+            ambs_available = [a for a in ambulances if a.is_available_for_assignment()]
+
+            if SIMULATION_PARAMETERS["PRINT"]:
+                print(
+                    f"{env.now}: ambs_on_route = {len(ambs_on_route)}, ambs_available = {len(ambs_available)}."
+                )
+
+            for en_route in ambs_on_route:
+                en_route_arrival_time = en_route.scene_arrival_time
+                en_route_destination = en_route.patient.patient_location_ID
+                patient = en_route.patient
+                assert patient
+
+                # List will be used as a minimum-ordered binary-heap with the
+                # first key being arrival time - so the minimum value will
+                # be the alternative ambulance that would arrive first
+                alternatives: List[Tuple[int, int, Ambulance]] = []
+
+                for avail in ambs_available:
+                    avail_arrival_time = (
+                        env.now
+                        + SIMULATION_DATA["SIREN_DRIVING_MATRIX"].loc[
+                            avail.get_current_location_id(
+                                SIMULATION_PARAMETERS, SIMULATION_DATA
+                            ),
+                            en_route_destination,
+                        ]
+                    )
+
+                    if (
+                        en_route_arrival_time - avail_arrival_time
+                    ) >= SIMULATION_PARAMETERS["EN_ROUTE_REASSIGNMENT_MINIMUM"]:
+                        heapq.heappush(
+                            alternatives,
+                            (avail_arrival_time, avail.ambulance_ID, avail),
+                        )
+
+                if alternatives:
+                    (new_arrival_time, _, replacement) = heapq.heappop(alternatives)
+                    saving = en_route_arrival_time - new_arrival_time
+                    if SIMULATION_PARAMETERS["PRINT"]:
+                        print(
+                            f"{env.now}: Dispatcher would reassign the patient {patient.patient_ID} from ambulance {en_route.ambulance_ID} to {replacement.ambulance_ID} with a potential time saving of {saving} minutes"
+                        )
+
+                    # Interrupt the current driving process
+                    en_route.drive_process.interrupt(
+                        cause=f"Assigning patient from ambulance {en_route.ambulance_ID} to {replacement.ambulance_ID}"
+                    )
+
+                    # Can't double use this ambulance
+                    ambs_available.remove(replacement)
+
+                    # Trigger replacement ambulance using the usual logic
+                    replacement.set_assigned_to_patient()  # neccessary to race conditions
+                    env.process(
+                        replacement.process_patient(
+                            patient,
+                            simulation_times,
+                            charging_stations["charging_stations_hospitals"],
+                            SIMULATION_PARAMETERS,
+                            SIMULATION_DATA,
+                        )
+                    )
+
+        if SIMULATION_PARAMETERS["PRINT"]:
+            print(
+                f"{env.now}: Checking to see if any queued patients can be allocated - there are {len(patient_queue)}."
+            )
+
+        while len(patient_queue) > 0:
+            wp_counter = 0
             for w_patient in patient_queue:
                 wp_counter += 1
                 if SIMULATION_PARAMETERS["PRINT"]:
@@ -919,7 +1148,7 @@ def help_waiting_patients(
                     if SIMULATION_PARAMETERS["PRINT"]:
                         print(
                             f"Remove w_patient {w_patient.patient_ID} "
-                            f"from the deque {patient_queue}."
+                            f"from the queue {patient_queue}."
                         )
                     patient_queue.remove(w_patient)
                     # set_assigned_to_patient necessary for correctly working
@@ -930,7 +1159,7 @@ def help_waiting_patients(
                             f"Ambulance {ambulance_ID} is assigned to "
                             f"patient {w_patient.patient_ID}."
                         )
-                        print(f"After removal the deque is {patient_queue}.")
+                        print(f"After removal the queue is {patient_queue}.")
                     env.process(
                         ambulance_aid_process(
                             env,
@@ -950,7 +1179,7 @@ def help_waiting_patients(
                     if SIMULATION_PARAMETERS["PRINT"]:
                         print(
                             f"Patient {w_patient.patient_ID} cannot be "
-                            "helped by an ambulance. The deque is "
+                            "helped by an ambulance. The queue is "
                             f"{patient_queue}."
                         )
 
@@ -969,7 +1198,7 @@ def ambulance_aid_process(
     env: sp.core.Environment,
     assigned_patient: Patient,
     ambulance: Ambulance,
-    patient_queue: deque,
+    patient_queue: list,
     charging_stations: dict[
         str, dict[str, list[sp.resources.resource.Resource | float]]
     ],
@@ -994,7 +1223,7 @@ def ambulance_aid_process(
         The patient (object) that was assigned to the ambulance.
     ambulance : Ambulance
         The ambulance object.
-    patient_queue : deque
+    patient_queue : list
         The patient queue.
     charging_stations : dict[str, dict[str, list[sp.resources.resource.Resource | float]]]
         The charging stations resources at all bases and all hospitals together
@@ -1017,18 +1246,16 @@ def ambulance_aid_process(
 
     yield env.process(
         ambulance.process_patient(
-            assigned_patient.patient_ID,
-            assigned_patient.patient_location_ID,
-            assigned_patient.hospital_location_ID,
+            assigned_patient,
             simulation_times,
             charging_stations["charging_stations_hospitals"],
-            to_hospital_bool,
             SIMULATION_PARAMETERS,
             SIMULATION_DATA,
         )
     )
 
-    while len(patient_queue) > 0:
+    # Add an additional shift end check first
+    while (ambulance.shift_end_time > env.now) and (len(patient_queue) > 0):
         if SIMULATION_PARAMETERS["PRINT"]:
             print(f"w_patient loop for ambulance {ambulance.ambulance_ID}.")
             print(
@@ -1042,15 +1269,17 @@ def ambulance_aid_process(
             # Loop through patients in FCFS manner and check whether ambu is assignable.
             if SIMULATION_PARAMETERS["PRINT"]:
                 print(f"Patient {w_patient.patient_ID} is in the queue.")
-            if ambulance.check_patient_reachable(
-                ambulance.current_location_ID,
-                w_patient.patient_location_ID,
-                w_patient.hospital_location_ID,
-                charging_stations["charging_stations_hospitals"],
-                SIMULATION_PARAMETERS,
-                SIMULATION_DATA,
+            if (
+                ambulance.check_patient_reachable(
+                    ambulance.current_location_ID,
+                    w_patient.patient_location_ID,
+                    w_patient.hospital_location_ID,
+                    charging_stations["charging_stations_hospitals"],
+                    SIMULATION_PARAMETERS,
+                    SIMULATION_DATA,
+                )
+                and ambulance.is_available_for_assignment()
             ):
-
                 if SIMULATION_PARAMETERS["PRINT"]:
                     print(
                         f"Patient {w_patient.patient_ID} is assignable to "
@@ -1058,22 +1287,19 @@ def ambulance_aid_process(
                     )
                     print(
                         f"Remove patient {w_patient.patient_ID} "
-                        f"from the deque {patient_queue}."
+                        f"from the queue {patient_queue}."
                     )
                 patient_queue.remove(w_patient)
                 # set_assigned_to_patient necessary for correctly working
                 # while and for-loops help_waiting_patients().
                 ambulance.set_assigned_to_patient()
                 if SIMULATION_PARAMETERS["PRINT"]:
-                    print(f"After removal the deque is {patient_queue}.")
+                    print(f"After removal the queue is {patient_queue}.")
                 yield env.process(
                     ambulance.process_patient(
-                        w_patient.patient_ID,
-                        w_patient.patient_location_ID,
-                        w_patient.hospital_location_ID,
+                        w_patient,
                         simulation_times,
                         charging_stations["charging_stations_hospitals"],
-                        to_hospital_bool,
                         SIMULATION_PARAMETERS,
                         SIMULATION_DATA,
                     )
@@ -1081,7 +1307,7 @@ def ambulance_aid_process(
                 if SIMULATION_PARAMETERS["PRINT"]:
                     print(
                         f"Ambulance {ambulance.ambulance_ID} has finished "
-                        f"treating patient {w_patient.patient_ID}."
+                        f"process_patient for {w_patient.patient_ID}."
                     )
                 wp_counter = 0
                 break
@@ -1093,10 +1319,7 @@ def ambulance_aid_process(
             )
         if wp_counter == len(patient_queue):
             if SIMULATION_PARAMETERS["PRINT"]:
-                print(
-                    f"Ambulance {ambulance.ambulance_ID} cannot "
-                    "help any patient."
-                )
+                print(f"Ambulance {ambulance.ambulance_ID} cannot help any patient.")
             break
 
     yield env.process(
@@ -1161,15 +1384,11 @@ def ambulance_drive_process(
 
     if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel":
         yield env.process(
-            ambulance.go_to_base_station(
-                SIMULATION_PARAMETERS, SIMULATION_DATA
-            )
+            ambulance.go_to_base_station(SIMULATION_PARAMETERS, SIMULATION_DATA)
         )
     else:  # Ambulance is electric.
         # Check whether ambulance can go to its base. If not, first charge at the hospital.
-        if not ambulance.check_base_reachable(
-            SIMULATION_PARAMETERS, SIMULATION_DATA
-        ):
+        if not ambulance.check_base_reachable(SIMULATION_PARAMETERS, SIMULATION_DATA):
             if (
                 ambulance.current_location_ID
                 not in SIMULATION_DATA["NODES_HOSPITAL"].Hospital.values
@@ -1202,9 +1421,7 @@ def ambulance_drive_process(
 
         if not charging_hospital_interrupted:
             driving_interrupted = yield env.process(
-                ambulance.go_to_base_station(
-                    SIMULATION_PARAMETERS, SIMULATION_DATA
-                )
+                ambulance.go_to_base_station(SIMULATION_PARAMETERS, SIMULATION_DATA)
             )
             if not driving_interrupted:
                 if SIMULATION_PARAMETERS["PRINT"]:
@@ -1284,52 +1501,71 @@ def check_select_ambulance(
     nr_ambulances_available = 0
     assignable_ambulances = []
     assignable_locations = []
-    nr_ambulances_not_assignable = 0
+    nr_ambulances_not_assignable = {
+        "with_patient": 0,
+        "meal_break": 0,
+        "before_shift": 0,
+        "after_shift": 0,
+    }
+
+    if (
+        nr_ambulances_not_assignable["after_shift"]
+        == SIMULATION_PARAMETERS["NUM_AMBULANCES"]
+    ):
+        raise Exception(
+            "All ambulances are off-shift - no-one available to help this patient"
+        )
 
     for j in range(len(ambulances)):
-        if not (
-            ambulances[j].helps_patient or ambulances[j].assigned_to_patient
-        ):
-            nr_ambulances_available += 1
-            if ambulances[j].drives_to_base:
-                if SIMULATION_PARAMETERS["PRINT"]:
-                    print(
-                        "Driving since: "
-                        f"{ambulances[j].resource.users[0].usage_since}."
-                    )
+        if ambulances[j].helps_patient or ambulances[j].assigned_to_patient:
+            nr_ambulances_not_assignable["with_patient"] += 1
+            continue
 
-                if ambulances[j].resource.users[0].usage_since is None:
-                    raise Exception(
-                        "The ambulance is not being used. This is incorrect."
-                    )
+        if ambulances[j].in_meal_break:
+            nr_ambulances_not_assignable["meal_break"] += 1
+            continue
 
-                driven_time = env.now - ambulances[j].resource.users[0].usage_since  # type: ignore
-                (new_x, new_y) = calculate_new_coordinate(
-                    driven_time,
-                    ambulances[j].current_location_ID,
-                    ambulances[j].base_location_ID,
-                    True,
-                    SIMULATION_PARAMETERS,
-                    SIMULATION_DATA,
-                )
-                ambulance_location_ID = select_closest_location_ID(
-                    (new_x, new_y), SIMULATION_PARAMETERS, SIMULATION_DATA
-                )
-            else:
-                ambulance_location_ID = ambulances[j].current_location_ID
+        if env.now < ambulances[j].shift_start_time:
+            nr_ambulances_not_assignable["before_shift"] += 1
+            continue
 
-            if ambulances[j].check_patient_reachable(
-                ambulance_location_ID,
-                patient.patient_location_ID,
-                patient.hospital_location_ID,
-                charging_stations_hospitals,
+        if env.now > ambulances[j].shift_end_time:
+            nr_ambulances_not_assignable["after_shift"] += 1
+            continue
+
+        nr_ambulances_available += 1
+        if ambulances[j].drives_to_base:
+            if SIMULATION_PARAMETERS["PRINT"]:
+                print(f"Driving since: {ambulances[j].resource.users[0].usage_since}.")
+
+            if ambulances[j].resource.users[0].usage_since is None:
+                raise Exception("The ambulance is not being used. This is incorrect.")
+
+            driven_time = env.now - ambulances[j].resource.users[0].usage_since  # type: ignore
+            (new_x, new_y) = calculate_new_coordinate(
+                driven_time,
+                ambulances[j].current_location_ID,
+                ambulances[j].base_location_ID,
+                True,
                 SIMULATION_PARAMETERS,
                 SIMULATION_DATA,
-            ):
-                assignable_ambulances.append(j)
-                assignable_locations.append(ambulance_location_ID)
-            else:
-                nr_ambulances_not_assignable += 1
+            )
+            ambulance_location_ID = select_closest_location_ID(
+                (new_x, new_y), SIMULATION_PARAMETERS, SIMULATION_DATA
+            )
+        else:
+            ambulance_location_ID = ambulances[j].current_location_ID
+
+        if ambulances[j].check_patient_reachable(
+            ambulance_location_ID,
+            patient.patient_location_ID,
+            patient.hospital_location_ID,
+            charging_stations_hospitals,
+            SIMULATION_PARAMETERS,
+            SIMULATION_DATA,
+        ):
+            assignable_ambulances.append(j)
+            assignable_locations.append(ambulance_location_ID)
 
     if SIMULATION_PARAMETERS["PRINT"]:
         print(f"The nr_ambulances_available is {nr_ambulances_available}.")
@@ -1338,9 +1574,10 @@ def check_select_ambulance(
             f"and the assignable locations are: {assignable_locations}."
         )
         print(
-            "The nr of ambulances not assignable are: "
-            f"{nr_ambulances_not_assignable}."
+            f"The nr of ambulances not assignable are: {nr_ambulances_not_assignable}."
         )
+
+    nr_ambulances_not_assignable = sum(nr_ambulances_not_assignable.values())
 
     if len(assignable_ambulances) == 0:
         PATIENT_ASSIGNED = False
@@ -1351,12 +1588,12 @@ def check_select_ambulance(
                 f"{patient.patient_ID}. The patient remains in the queue."
             )
     else:
-        SIMULATION_DATA["output_patient"][
-            patient.patient_ID, 4
-        ] = nr_ambulances_available
-        SIMULATION_DATA["output_patient"][
-            patient.patient_ID, 5
-        ] = nr_ambulances_not_assignable
+        SIMULATION_DATA["output_patient"][patient.patient_ID, 4] = (
+            nr_ambulances_available
+        )
+        SIMULATION_DATA["output_patient"][patient.patient_ID, 5] = (
+            nr_ambulances_not_assignable
+        )
         PATIENT_ASSIGNED = True
         postal_code_shortest_time = (
             SIMULATION_DATA["SIREN_DRIVING_MATRIX"]
@@ -1368,9 +1605,7 @@ def check_select_ambulance(
         ]
 
         if SIMULATION_PARAMETERS["PRINT"]:
-            print(
-                "The times from all assignable ambulances to the patient are: "
-            )
+            print("The times from all assignable ambulances to the patient are: ")
             print(
                 SIMULATION_DATA["SIREN_DRIVING_MATRIX"].loc[
                     assignable_locations, patient.patient_location_ID
@@ -1380,10 +1615,7 @@ def check_select_ambulance(
                 "The postal code with the shortest time is: "
                 f"{postal_code_shortest_time}."
             )
-            print(
-                "The corresponding ambulance is (first in order): "
-                f"{ambulance_ID}."
-            )
+            print(f"The corresponding ambulance is (first in order): {ambulance_ID}.")
 
     return PATIENT_ASSIGNED, ambulance_ID
 
@@ -1418,16 +1650,6 @@ def select_hospital(
         The selected hospital ID.
 
     """
-
-    if SIMULATION_PARAMETERS["PRINT"]:
-        print(f"The source location is {source_location_ID}.")
-
-        print("The time from the source location to all hospitals is: ")
-        print(
-            SIMULATION_DATA["SIREN_DRIVING_MATRIX"].loc[
-                source_location_ID, SIMULATION_DATA["NODES_HOSPITAL"].Hospital
-            ]
-        )
 
     return (
         SIMULATION_DATA["SIREN_DRIVING_MATRIX"]

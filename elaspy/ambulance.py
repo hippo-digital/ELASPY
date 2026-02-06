@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import simpy as sp
-import numpy as np
-
-from pytest import approx
 from typing import Any, Optional
+
+import numpy as np
+import pandas as pd
+import simpy as sp
 from coordinate_methods import (
     calculate_new_coordinate,
     select_closest_location_ID,
 )
+from patient import Patient
 
 
 class Ambulance:
@@ -58,6 +59,8 @@ class Ambulance:
         ENGINE_TYPE: str,
         ID: int,
         BATTERY_CAPACITY: float,
+        extra_data: pd.Series,
+        mb_policy_func,
     ) -> None:
         """
         Initializes an ambulance.
@@ -78,9 +81,10 @@ class Ambulance:
         """
 
         self.env: sp.core.Environment = env
-        self.resource: sp.resources.resource.PreemptiveResource = (
-            sp.PreemptiveResource(env, capacity=1)
+        self.resource: sp.resources.resource.PreemptiveResource = sp.PreemptiveResource(
+            env, capacity=1
         )
+        self.patient: Patient | None = None
         self.assigned_to_patient: bool = False
         self.helps_patient: bool = False
         self.drives_to_base: bool = False
@@ -93,6 +97,19 @@ class Ambulance:
         self.ambulance_ID: int = ID
         self.charging_since: float = np.nan
         self.speed_charger: float = np.nan
+
+        extra_data = pd.Series() if extra_data is None else extra_data
+
+        self.had_meal_break = extra_data.get("had_meal_break", 0) == 1
+        self.in_meal_break = False
+        self.meal_break_start = extra_data.get("meal_break_start", None)
+        self.meal_break_end = extra_data.get("meal_break_end", None)
+
+        self.shift_start_time = extra_data.get("shift_start", None)
+        self.shift_end_time = extra_data.get("shift_end", None)
+        self.shift_duration = extra_data.get("shift_duration", None)
+
+        self.mb_allowed_by_policy = mb_policy_func
 
     def check_patient_reachable(
         self,
@@ -145,12 +162,12 @@ class Ambulance:
             Whether the patient is reachable or not.
 
         """
+        # XXX: Potential improvemnet: add a max distance/time to allow assignement over
 
         if self.ENGINE_TYPE == "diesel":
-            if SIMULATION_PARAMETERS["PRINT"]:
-                print(
-                    "The ENGINE_TYPE is diesel, so the patient is reachable."
-                )
+            # Disabled this print as it was flooding the log
+            # if SIMULATION_PARAMETERS["PRINT"]:
+            #     print("The ENGINE_TYPE is diesel, so the patient is reachable.")
             return True
         elif self.ENGINE_TYPE == "electric":
             (
@@ -164,11 +181,9 @@ class Ambulance:
                 SIMULATION_DATA=SIMULATION_DATA,
             )
 
-            required_battery_idling = (
-                Ambulance.calculate_battery_reduction_idling(
-                    SIMULATION_PARAMETERS["AID_PARAMETERS"][-1],
-                    SIMULATION_PARAMETERS,
-                )
+            required_battery_idling = Ambulance.calculate_battery_reduction_idling(
+                SIMULATION_PARAMETERS["AID_PARAMETERS"][-1],
+                SIMULATION_PARAMETERS,
             )
 
             (
@@ -215,10 +230,7 @@ class Ambulance:
                 + required_battery_to_base
             )
 
-            if (
-                str(hospital_location_ID)
-                not in charging_stations_hospitals.keys()
-            ):
+            if str(hospital_location_ID) not in charging_stations_hospitals.keys():
                 route_APHB = (
                     required_battery_to_patient
                     + required_battery_idling
@@ -283,19 +295,14 @@ class Ambulance:
                         "The battery increase since charging is equal "
                         f"to: {battery_increase_since_charging} kWh."
                     )
-                current_battery = (
-                    current_battery + battery_increase_since_charging
-                )
+                current_battery = current_battery + battery_increase_since_charging
 
             if self.drives_to_base and self.charges:
                 raise Exception("Driving to base and charges is true. Error.")
 
             if (
-                str(hospital_location_ID)
-                not in charging_stations_hospitals.keys()
-            ) and (
-                current_battery >= route_APB and current_battery >= route_APHB
-            ):
+                str(hospital_location_ID) not in charging_stations_hospitals.keys()
+            ) and (current_battery >= route_APB and current_battery >= route_APHB):
                 if SIMULATION_PARAMETERS["PRINT"]:
                     print(
                         "The hospital has no charger. The current battery "
@@ -303,9 +310,7 @@ class Ambulance:
                         "The routes A->P->B and A->P->H->B are reachable."
                     )
                 return True
-            elif (
-                str(hospital_location_ID) in charging_stations_hospitals.keys()
-            ) and (
+            elif (str(hospital_location_ID) in charging_stations_hospitals.keys()) and (
                 current_battery >= route_APH and current_battery >= route_APB
             ):
                 if SIMULATION_PARAMETERS["PRINT"]:
@@ -334,16 +339,28 @@ class Ambulance:
         """
         self.assigned_to_patient = True
 
+    def is_available_for_assignment(self) -> bool:
+        if self.env.now < self.shift_start_time:
+            return False
+
+        if self.env.now > self.shift_end_time:
+            return False
+
+        if self.in_meal_break:
+            return False
+
+        if self.assigned_to_patient:
+            return False
+
+        return True
+
     def process_patient(
         self,
-        patient_ID: int,
-        patient_location_ID: int,
-        hospital_location_ID: int,
+        patient: Patient,
         simulation_times: dict[str, np.ndarray],
         charging_stations_hospitals: dict[
             str, list[sp.resources.resource.Resource | float]
         ],
-        to_hospital_bool: np.ndarray,
         SIMULATION_PARAMETERS: dict[str, Any],
         SIMULATION_DATA: dict[str, Any],
     ):
@@ -388,19 +405,30 @@ class Ambulance:
         Exception
             1. If an ambulance is already helping a patient.
             2. If more than one patient was assigned to the ambulance.
+            3. If the ambulance shift is not yet started.
 
         """
 
+        if self.env.now < self.shift_start_time:
+            raise Exception(
+                "Ambulance cannot be assigned to a patient before the start of its shift"
+            )
+
+        if self.env.now > self.shift_end_time:
+            raise Exception(
+                "Ambulance cannot be assigned to a patient after the end of its shift"
+            )
+
         if SIMULATION_PARAMETERS["PRINT"]:
             print(
-                f"{self.env.now}: Patient {patient_ID} gets "
+                f"{self.env.now}: Patient {patient.patient_ID} gets "
                 "in the process patient method "
                 f"with ambulance {self.ambulance_ID}."
             )
         if self.helps_patient:
             raise Exception(
-                "The ambulance is already helping a patient,"
-                "so it cannot help another patient. Error."
+                f"Ambulance {self.ambulance_ID} is already helping patient {self.patient.patient_ID},"
+                f"so it cannot help another patient ({patient.patient_ID}). Error."
             )
 
         # Patient uses ambulance resource; always possible because of earlier check.
@@ -408,21 +436,19 @@ class Ambulance:
         with self.resource.request(priority=1) as req:
             if len(self.resource.queue) > 0:
                 raise Exception(
-                    "More than one patients were assigned to the "
-                    "ambulance at the same time. Error."
+                    f"More than one patients were assigned to ambulance {self.ambulance_ID} at the same time. Error."
                 )
             yield req
+
+            self.patient = patient
+            patient_ID = patient.patient_ID
 
             waiting_time_assigned = (
                 self.env.now - SIMULATION_DATA["output_patient"][patient_ID, 2]
             )  # minus arrival time patient.
 
-            SIMULATION_DATA["output_patient"][
-                patient_ID, 6
-            ] = self.ambulance_ID
-            SIMULATION_DATA["output_patient"][
-                patient_ID, 7
-            ] = waiting_time_assigned
+            SIMULATION_DATA["output_patient"][patient_ID, 6] = self.ambulance_ID
+            SIMULATION_DATA["output_patient"][patient_ID, 7] = waiting_time_assigned
 
             if SIMULATION_PARAMETERS["PRINT"]:
                 print(
@@ -438,82 +464,162 @@ class Ambulance:
                     f"location {self.current_location_ID}."
                 )
             self.helps_patient = True
-            yield self.env.process(
-                self.go_to_patient(
-                    patient_ID,
-                    patient_location_ID,
-                    SIMULATION_PARAMETERS,
-                    SIMULATION_DATA,
-                )
-            )
-            response_time = (
-                self.env.now - SIMULATION_DATA["output_patient"][patient_ID, 2]
-            )  # minus arrival time patient.
-            SIMULATION_DATA["output_patient"][patient_ID, 9] = self.env.now
-            yield self.env.process(
-                self.on_site_aid_patient(
-                    patient_ID,
-                    simulation_times["on_site"],
-                    SIMULATION_PARAMETERS,
-                    SIMULATION_DATA,
-                )
-            )
 
-            if to_hospital_bool[patient_ID]:
-                SIMULATION_DATA["output_patient"][patient_ID, 11] = 1
-                SIMULATION_DATA["output_patient"][
-                    patient_ID, 12
-                ] = hospital_location_ID
-                if SIMULATION_PARAMETERS["PRINT"]:
-                    print(
-                        f"Patient {patient_ID} has to be brought to hospital."
-                    )
-                yield self.env.process(
-                    self.go_to_hospital(
-                        patient_ID,
-                        hospital_location_ID,
+            start_driving_time = self.env.now
+            try:
+                self.drive_process = self.env.process(
+                    self.go_to_patient(
                         SIMULATION_PARAMETERS,
                         SIMULATION_DATA,
                     )
                 )
+                yield self.drive_process
+
+                response_time = (
+                    self.env.now - SIMULATION_DATA["output_patient"][patient_ID, 2]
+                )  # minus arrival time patient.
+                SIMULATION_DATA["output_patient"][patient_ID, 9] = self.env.now
                 yield self.env.process(
-                    self.drop_off_time(
-                        patient_ID,
-                        hospital_location_ID,
-                        simulation_times["drop_off"],
-                        charging_stations_hospitals,
+                    self.on_site_aid_patient(
+                        simulation_times["on_site"],
                         SIMULATION_PARAMETERS,
                         SIMULATION_DATA,
                     )
                 )
-            else:
+
+                if self.patient.to_hospital:
+                    SIMULATION_DATA["output_patient"][patient_ID, 11] = 1
+                    SIMULATION_DATA["output_patient"][patient_ID, 12] = (
+                        self.patient.hospital_location_ID
+                    )
+                    if SIMULATION_PARAMETERS["PRINT"]:
+                        print(f"Patient {patient_ID} has to be brought to hospital.")
+
+                    yield self.env.process(
+                        self.go_to_hospital(
+                            SIMULATION_PARAMETERS,
+                            SIMULATION_DATA,
+                        )
+                    )
+                    yield self.env.process(
+                        self.drop_off_time(
+                            simulation_times["drop_off"],
+                            charging_stations_hospitals,
+                            SIMULATION_PARAMETERS,
+                            SIMULATION_DATA,
+                        )
+                    )
+                else:
+                    if SIMULATION_PARAMETERS["PRINT"]:
+                        print(
+                            f"Patient {patient_ID} does not have to be brought to hospital."
+                        )
+                    SIMULATION_DATA["output_patient"][patient_ID, 11] = 0
+
                 if SIMULATION_PARAMETERS["PRINT"]:
                     print(
-                        f"Patient {patient_ID} does not "
-                        "have to be brought to hospital."
+                        f"{self.env.now}: Ambulance {self.ambulance_ID} "
+                        f"has finished treating patient {patient_ID}."
                     )
-                SIMULATION_DATA["output_patient"][patient_ID, 11] = 0
 
-            if SIMULATION_PARAMETERS["PRINT"]:
-                print(
-                    f"{self.env.now}: Ambulance {self.ambulance_ID} "
-                    f"has finished treating patient {patient_ID}."
+                SIMULATION_DATA["output_patient"][patient_ID, 15] = self.env.now
+
+                SIMULATION_DATA["output_patient"][patient_ID, 1] = response_time
+                if SIMULATION_PARAMETERS["PRINT"]:
+                    print(
+                        f"Patient {patient_ID} had a total response time of {response_time}."
+                    )
+
+            except sp.Interrupt as interrupt:
+                if SIMULATION_PARAMETERS["PRINT"]:
+                    print("Preemption. While driving to a patient.")
+
+                driven_time = self.env.now - start_driving_time  # type: ignore
+
+                if SIMULATION_PARAMETERS["PRINT"]:
+                    print(f"Driving since {start_driving_time}.")  # type: ignore
+                    print(
+                        f"Ambulance {self.ambulance_ID} got preempted by "
+                        f"{interrupt.cause} at {self.env.now}"  # type: ignore
+                        f" after {driven_time}."
+                    )
+
+                (new_x, new_y) = calculate_new_coordinate(
+                    driven_time,
+                    self.current_location_ID,
+                    self.patient.patient_location_ID,
+                    siren_off=False,
+                    SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
+                    SIMULATION_DATA=SIMULATION_DATA,
                 )
+                new_location_ID = select_closest_location_ID(
+                    (new_x, new_y), SIMULATION_PARAMETERS, SIMULATION_DATA
+                )
+
+                if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric":
+                    (
+                        battery_reduction,
+                        distance_km,
+                    ) = Ambulance.calculate_battery_reduction_and_distance_driving(
+                        self.current_location_ID,
+                        new_location_ID,
+                        siren_off=False,
+                        SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
+                        SIMULATION_DATA=SIMULATION_DATA,
+                    )
+                    self.add_ambulance_data_battery_decrease(
+                        battery_reduction,
+                        idle=False,
+                        idle_time=None,
+                        driven_km=distance_km,
+                        source_location_ID=self.current_location_ID,
+                        target_location_ID=new_location_ID,
+                        SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
+                        SIMULATION_DATA=SIMULATION_DATA,
+                    )
+                    self.decrease_battery(battery_reduction)
+                    if SIMULATION_PARAMETERS["PRINT"]:
+                        print(
+                            f"The battery of ambulance {self.ambulance_ID} "
+                            f"is reduced by: {battery_reduction}. "
+                            "The current battery level of ambulance "
+                            f"{self.ambulance_ID} is {self.battery}."
+                        )
+                elif SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel":
+                    self.add_ambulance_data_diesel(
+                        idle=False,
+                        idle_time=None,
+                        source_location_ID=self.current_location_ID,
+                        target_location_ID=new_location_ID,
+                        SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
+                        SIMULATION_DATA=SIMULATION_DATA,
+                    )
+                else:
+                    raise Exception(
+                        "Wrong 'ENGINE_TYPE' specified. "
+                        "It should be either 'diesel' or 'electric'."
+                    )
+
+                self.current_location_ID = new_location_ID
+
+            finally:
+                del self.drive_process
+
+            # Release the resource and the state flags
             self.helps_patient = False
             self.assigned_to_patient = False
-            SIMULATION_DATA["output_patient"][patient_ID, 15] = self.env.now
+            self.patient = None
 
-        SIMULATION_DATA["output_patient"][patient_ID, 1] = response_time
-        if SIMULATION_PARAMETERS["PRINT"]:
-            print(
-                f"Patient {patient_ID} had a total "
-                f"response time of {response_time}."
+        assert len(self.resource.queue) < 1, "Queue not freed"
+
+        # Now the ambulance is available again check if this ambulance should take a meal break.
+        if SIMULATION_PARAMETERS["WITH_MEAL_BREAKS"]:
+            yield self.env.process(
+                self.check_meal_break(SIMULATION_DATA, SIMULATION_PARAMETERS)
             )
 
     def go_to_patient(
         self,
-        patient_ID: int,
-        patient_location_ID: int,
         SIMULATION_PARAMETERS: dict[str, Any],
         SIMULATION_DATA: dict[str, Any],
     ):
@@ -545,72 +651,84 @@ class Ambulance:
         """
 
         to_site_travel_time = SIMULATION_DATA["SIREN_DRIVING_MATRIX"].loc[
-            self.current_location_ID, patient_location_ID
+            self.current_location_ID, self.patient.patient_location_ID
         ]
-        SIMULATION_DATA["output_patient"][patient_ID, 8] = to_site_travel_time
+        SIMULATION_DATA["output_patient"][self.patient.patient_ID, 8] = (
+            to_site_travel_time
+        )
         if SIMULATION_PARAMETERS["PRINT"]:
             print(
                 f"{self.env.now}: Ambulance {self.ambulance_ID} drives "
                 f"from location {self.current_location_ID} to patient "
-                f"{patient_ID} at {patient_location_ID} in "
+                f"{self.patient.patient_ID} at {self.patient.patient_location_ID} in "
                 f"{to_site_travel_time}."
             )
-        yield self.env.timeout(to_site_travel_time)
 
-        if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric":
-            (
-                battery_reduction,
-                distance_km,
-            ) = Ambulance.calculate_battery_reduction_and_distance_driving(
-                self.current_location_ID,
-                patient_location_ID,
-                siren_off=False,
-                SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
-                SIMULATION_DATA=SIMULATION_DATA,
-            )
-            self.add_ambulance_data_battery_decrease(
-                battery_reduction,
-                idle=False,
-                idle_time=None,
-                driven_km=distance_km,
-                source_location_ID=self.current_location_ID,
-                target_location_ID=patient_location_ID,
-                SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
-                SIMULATION_DATA=SIMULATION_DATA,
-            )
-            self.decrease_battery(battery_reduction)
+        try:
+            self.scene_arrival_time = self.env.now + to_site_travel_time
+            self.scene_drive_time_start = self.env.now
+            yield self.env.timeout(to_site_travel_time)
+
+            if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric":
+                (
+                    battery_reduction,
+                    distance_km,
+                ) = Ambulance.calculate_battery_reduction_and_distance_driving(
+                    self.current_location_ID,
+                    self.patient.patient_location_ID,
+                    siren_off=False,
+                    SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
+                    SIMULATION_DATA=SIMULATION_DATA,
+                )
+                self.add_ambulance_data_battery_decrease(
+                    battery_reduction,
+                    idle=False,
+                    idle_time=None,
+                    driven_km=distance_km,
+                    source_location_ID=self.current_location_ID,
+                    target_location_ID=self.patient.patient_location_ID,
+                    SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
+                    SIMULATION_DATA=SIMULATION_DATA,
+                )
+                self.decrease_battery(battery_reduction)
+                if SIMULATION_PARAMETERS["PRINT"]:
+                    print(
+                        f"{self.env.now}: The battery of ambulance "
+                        f"{self.ambulance_ID} is reduced by: {battery_reduction}. "
+                        "The current battery level of ambulance "
+                        f"{self.ambulance_ID} is {self.battery}."
+                    )
+            elif SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel":
+                self.add_ambulance_data_diesel(
+                    idle=False,
+                    idle_time=None,
+                    source_location_ID=self.current_location_ID,
+                    target_location_ID=self.patient.patient_location_ID,
+                    SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
+                    SIMULATION_DATA=SIMULATION_DATA,
+                )
+            else:
+                raise Exception(
+                    "Wrong 'ENGINE_TYPE' specified. "
+                    "It should be either 'diesel' or 'electric'."
+                )
+
+            self.current_location_ID = self.patient.patient_location_ID
             if SIMULATION_PARAMETERS["PRINT"]:
                 print(
-                    f"{self.env.now}: The battery of ambulance "
-                    f"{self.ambulance_ID} is reduced by: {battery_reduction}. "
-                    "The current battery level of ambulance "
-                    f"{self.ambulance_ID} is {self.battery}."
+                    f"{self.env.now}: Ambulance {self.ambulance_ID} "
+                    f"arrived at patient {self.patient.patient_ID}."
                 )
-        elif SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel":
-            self.add_ambulance_data_diesel(
-                idle=False,
-                idle_time=None,
-                source_location_ID=self.current_location_ID,
-                target_location_ID=patient_location_ID,
-                SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
-                SIMULATION_DATA=SIMULATION_DATA,
-            )
-        else:
-            raise Exception(
-                "Wrong 'ENGINE_TYPE' specified. "
-                "It should be either 'diesel' or 'electric'."
-            )
 
-        self.current_location_ID = patient_location_ID
-        if SIMULATION_PARAMETERS["PRINT"]:
-            print(
-                f"{self.env.now}: Ambulance {self.ambulance_ID} "
-                f"arrived at patient {patient_ID}."
-            )
+        finally:
+            # Remove the arrival time variable
+            # Driving data for the partial journey will be updated in the process_patient
+            # exception handler
+            del self.scene_arrival_time
+            del self.scene_drive_time_start
 
     def on_site_aid_patient(
         self,
-        patient_ID: int,
         on_site_aid_times: np.ndarray,
         SIMULATION_PARAMETERS: dict[str, Any],
         SIMULATION_DATA: dict[str, Any],
@@ -644,23 +762,23 @@ class Ambulance:
         if SIMULATION_PARAMETERS["PRINT"]:
             print(
                 f"{self.env.now}: Ambulance {self.ambulance_ID} "
-                f"treats patient {patient_ID} on site "
+                f"treats patient {self.patient.patient_ID} on site "
                 f"({self.current_location_ID}) in "
-                f"{on_site_aid_times[patient_ID]}."
+                f"{on_site_aid_times[self.patient.patient_ID]}."
             )
-        yield self.env.timeout(on_site_aid_times[patient_ID])
-        SIMULATION_DATA["output_patient"][patient_ID, 10] = on_site_aid_times[
-            patient_ID
-        ]
+        yield self.env.timeout(on_site_aid_times[self.patient.patient_ID])
+        SIMULATION_DATA["output_patient"][self.patient.patient_ID, 10] = (
+            on_site_aid_times[self.patient.patient_ID]
+        )
 
         if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric":
             battery_reduction = Ambulance.calculate_battery_reduction_idling(
-                on_site_aid_times[patient_ID], SIMULATION_PARAMETERS
+                on_site_aid_times[self.patient.patient_ID], SIMULATION_PARAMETERS
             )
             self.add_ambulance_data_battery_decrease(
                 battery_reduction,
                 idle=True,
-                idle_time=on_site_aid_times[patient_ID],
+                idle_time=on_site_aid_times[self.patient.patient_ID],
                 driven_km=None,
                 source_location_ID=None,
                 target_location_ID=None,
@@ -678,7 +796,7 @@ class Ambulance:
         elif SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel":
             self.add_ambulance_data_diesel(
                 idle=True,
-                idle_time=on_site_aid_times[patient_ID],
+                idle_time=on_site_aid_times[self.patient.patient_ID],
                 source_location_ID=None,
                 target_location_ID=None,
                 SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
@@ -693,13 +811,11 @@ class Ambulance:
         if SIMULATION_PARAMETERS["PRINT"]:
             print(
                 f"{self.env.now}: Ambulance {self.ambulance_ID} "
-                f"treated patient {patient_ID} on site."
+                f"treated patient {self.patient.patient_ID} on site."
             )
 
     def go_to_hospital(
         self,
-        patient_ID: int,
-        hospital_location_ID: int,
         SIMULATION_PARAMETERS: dict[str, Any],
         SIMULATION_DATA: dict[str, Any],
     ):
@@ -733,15 +849,15 @@ class Ambulance:
         """
         # hospital_ID = select_hospital(self.current_location_ID)
         to_hospital_travel_time = SIMULATION_DATA["SIREN_DRIVING_MATRIX"].loc[
-            self.current_location_ID, hospital_location_ID
+            self.current_location_ID, self.patient.hospital_location_ID
         ]
-        SIMULATION_DATA["output_patient"][
-            patient_ID, 13
-        ] = to_hospital_travel_time
+        SIMULATION_DATA["output_patient"][self.patient.patient_ID, 13] = (
+            to_hospital_travel_time
+        )
         if SIMULATION_PARAMETERS["PRINT"]:
             print(
                 f"{self.env.now}: Ambulance {self.ambulance_ID} drives "
-                f"patient {patient_ID} to hospital {hospital_location_ID} "
+                f"patient {self.patient.patient_ID} to hospital {self.patient.hospital_location_ID} "
                 f"in {to_hospital_travel_time}."
             )
         yield self.env.timeout(to_hospital_travel_time)
@@ -752,7 +868,7 @@ class Ambulance:
                 distance_km,
             ) = Ambulance.calculate_battery_reduction_and_distance_driving(
                 self.current_location_ID,
-                hospital_location_ID,
+                self.patient.hospital_location_ID,
                 siren_off=False,
                 SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
                 SIMULATION_DATA=SIMULATION_DATA,
@@ -763,7 +879,7 @@ class Ambulance:
                 idle_time=None,
                 driven_km=distance_km,
                 source_location_ID=self.current_location_ID,
-                target_location_ID=hospital_location_ID,
+                target_location_ID=self.patient.hospital_location_ID,
                 SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
                 SIMULATION_DATA=SIMULATION_DATA,
             )
@@ -780,7 +896,7 @@ class Ambulance:
                 idle=False,
                 idle_time=None,
                 source_location_ID=self.current_location_ID,
-                target_location_ID=hospital_location_ID,
+                target_location_ID=self.patient.hospital_location_ID,
                 SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
                 SIMULATION_DATA=SIMULATION_DATA,
             )
@@ -790,18 +906,16 @@ class Ambulance:
                 "It should be either 'diesel' or 'electric'."
             )
 
-        self.current_location_ID = hospital_location_ID
+        self.current_location_ID = self.patient.hospital_location_ID
         if SIMULATION_PARAMETERS["PRINT"]:
             print(
                 f"{self.env.now}: Ambulance {self.ambulance_ID} "
                 f"arrived at {self.current_location_ID} "
-                f"(hospital {hospital_location_ID})."
+                f"(hospital {self.patient.hospital_location_ID})."
             )
 
     def drop_off_time(
         self,
-        patient_ID: int,
-        hospital_location_ID: int,
         drop_off_times: np.ndarray,
         charging_stations_hospitals: dict[
             str, list[sp.resources.resource.Resource | float]
@@ -838,23 +952,26 @@ class Ambulance:
         if SIMULATION_PARAMETERS["PRINT"]:
             print(
                 f"{self.env.now}: Ambulance {self.ambulance_ID} drops "
-                f"patient {patient_ID} off at hospital "
-                f"in {drop_off_times[patient_ID]}."
+                f"patient {self.patient.patient_ID} off at hospital "
+                f"in {drop_off_times[self.patient.patient_ID]}."
             )
 
-        SIMULATION_DATA["output_patient"][patient_ID, 14] = drop_off_times[
-            patient_ID
+        SIMULATION_DATA["output_patient"][self.patient.patient_ID, 14] = drop_off_times[
+            self.patient.patient_ID
         ]
 
-        dropping_off_patient = self.env.timeout(drop_off_times[patient_ID])
+        dropping_off_patient = self.env.timeout(drop_off_times[self.patient.patient_ID])
 
         if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel":
             yield dropping_off_patient
         else:  # Ambulance is electric.
-            if str(hospital_location_ID) in charging_stations_hospitals.keys():
+            if (
+                str(self.patient.hospital_location_ID)
+                in charging_stations_hospitals.keys()
+            ):
                 if SIMULATION_PARAMETERS["PRINT"]:
                     print(
-                        f"Hospital {hospital_location_ID} is part of the "
+                        f"Hospital {self.patient.hospital_location_ID} is part of the "
                         "charging_stations_hospitals keys. "
                         "Charging is in principle possible. "
                         f"Ambulance {self.ambulance_ID} will try to "
@@ -862,7 +979,7 @@ class Ambulance:
                     )
                 charging = self.env.process(
                     self.charge_at_drop_off(
-                        hospital_location_ID,
+                        self.patient.hospital_location_ID,
                         charging_stations_hospitals,
                         SIMULATION_PARAMETERS,
                         SIMULATION_DATA,
@@ -871,21 +988,24 @@ class Ambulance:
             else:
                 if SIMULATION_PARAMETERS["PRINT"]:
                     print(
-                        f"Hospital {hospital_location_ID} is not part of the "
+                        f"Hospital {self.patient.hospital_location_ID} is not part of the "
                         "charging_stations_hospitals keys. "
                         "The ambulance cannot charge during drop-off."
                     )
 
             yield dropping_off_patient
-            if str(hospital_location_ID) in charging_stations_hospitals.keys():
+            if (
+                str(self.patient.hospital_location_ID)
+                in charging_stations_hospitals.keys()
+            ):
                 if not charging.triggered:
                     charging.interrupt("Dropped patient off. Stop charging.")
 
         if SIMULATION_PARAMETERS["PRINT"]:
             print(
-                f"{self.env.now}: Ambulance {self.ambulance_ID} dropped "
-                f"patient {patient_ID} off at hospital "
-                f"{hospital_location_ID}."
+                f"{self.env.now}: Ambulance {self.ambulance_ID} finished handover of "
+                f"patient {self.patient.patient_ID} off at hospital "
+                f"{self.patient.hospital_location_ID}."
             )
             if SIMULATION_PARAMETERS["ENGINE_TYPE"] == "electric":
                 print(
@@ -929,6 +1049,15 @@ class Ambulance:
             Whether the driving was interrupted or not.
 
         """
+
+        # Check if the ambulance is already where it's supposed to be
+        if self.current_location_ID == self.base_location_ID:
+            if SIMULATION_PARAMETERS["PRINT"]:
+                print(
+                    f"{self.env.now}: Ambulance {self.ambulance_ID} is already at its base location"
+                )
+            return False
+
         # Driving to base uses ambulance resource; always possible because of earlier check (when the patient was assigned).
         # So that ambulance is used according to Simpy.
         driving_interrupted = False
@@ -936,7 +1065,11 @@ class Ambulance:
             if len(self.resource.queue) > 0:
                 raise Exception(
                     "There should not be a queue when an ambulance"
-                    "starts driving to its base. Error."
+                    "starts driving to its base. Error.",
+                    self.current_location_ID,
+                    self.base_location_ID,
+                    self.resource,
+                    self.resource.queue,
                 )
             yield req
 
@@ -950,6 +1083,7 @@ class Ambulance:
                 )
 
             self.drives_to_base = True
+            self.drives_to_base_start_time = self.env.now
             try:
                 to_base_station_driving_time = (
                     SIMULATION_DATA["SIREN_DRIVING_MATRIX"].loc[
@@ -1088,6 +1222,7 @@ class Ambulance:
                 driving_interrupted = True
 
         self.drives_to_base = False
+        self.drives_to_base_start_time = None
         if SIMULATION_PARAMETERS["PRINT"]:
             print(f"Drives to base is: {self.drives_to_base}.")
 
@@ -1257,9 +1392,7 @@ class Ambulance:
         SIMULATION_DATA["output_ambulance"][-1, 0] = self.ambulance_ID
         SIMULATION_DATA["output_ambulance"][-1, 1] = self.env.now
         SIMULATION_DATA["output_ambulance"][-1, 2] = self.battery
-        SIMULATION_DATA["output_ambulance"][-1, 3] = (
-            self.battery - decrease_quantity
-        )
+        SIMULATION_DATA["output_ambulance"][-1, 3] = self.battery - decrease_quantity
         # ambulance used battery
         SIMULATION_DATA["output_ambulance"][-1, 4] = 0
 
@@ -1344,9 +1477,7 @@ class Ambulance:
         SIMULATION_DATA["output_ambulance"][-1, 0] = self.ambulance_ID
         SIMULATION_DATA["output_ambulance"][-1, 1] = self.env.now
         SIMULATION_DATA["output_ambulance"][-1, 2] = self.battery
-        SIMULATION_DATA["output_ambulance"][-1, 3] = (
-            self.battery + increase_quantity
-        )
+        SIMULATION_DATA["output_ambulance"][-1, 3] = self.battery + increase_quantity
         # ambulance charged battery
         SIMULATION_DATA["output_ambulance"][-1, 4] = 1
 
@@ -1356,17 +1487,13 @@ class Ambulance:
 
         if charging_success:
             SIMULATION_DATA["output_ambulance"][-1, 14] = 1
-            SIMULATION_DATA["output_ambulance"][
-                -1, 15
-            ] = waiting_time_at_charger
+            SIMULATION_DATA["output_ambulance"][-1, 15] = waiting_time_at_charger
             SIMULATION_DATA["output_ambulance"][-1, 16] = charging_interrupted
             SIMULATION_DATA["output_ambulance"][-1, 17] = charging_time
             SIMULATION_DATA["output_ambulance"][-1, 18] = increase_quantity
         else:
             SIMULATION_DATA["output_ambulance"][-1, 14] = 0
-            SIMULATION_DATA["output_ambulance"][
-                -1, 15
-            ] = waiting_time_at_charger
+            SIMULATION_DATA["output_ambulance"][-1, 15] = waiting_time_at_charger
             SIMULATION_DATA["output_ambulance"][-1, 16] = charging_interrupted
 
     def decrease_battery(self, decrease_quantity: float) -> None:
@@ -1477,9 +1604,7 @@ class Ambulance:
             SIMULATION_DATA,
         )
 
-        required_increase_battery_to_full = (
-            self.MAX_BATTERY_LEVEL - self.battery
-        )
+        required_increase_battery_to_full = self.MAX_BATTERY_LEVEL - self.battery
 
         if SIMULATION_PARAMETERS["PRINT"]:
             print(
@@ -1551,10 +1676,7 @@ class Ambulance:
 
         else:
             if SIMULATION_PARAMETERS["PRINT"]:
-                print(
-                    f"Ambulance {self.ambulance_ID} will charge "
-                    "at the hospital."
-                )
+                print(f"Ambulance {self.ambulance_ID} will charge at the hospital.")
 
             (
                 selected_charger,
@@ -1669,10 +1791,7 @@ class Ambulance:
             try:
                 request = selected_charger.request()
                 if SIMULATION_PARAMETERS["PRINT"]:
-                    print(
-                        "Before charging the queue is: "
-                        f"{selected_charger.queue}."
-                    )
+                    print(f"Before charging the queue is: {selected_charger.queue}.")
                 start_waiting = self.env.now
                 yield request
                 waiting_time_at_charger = self.env.now - start_waiting
@@ -1796,8 +1915,7 @@ class Ambulance:
                         )
                 else:
                     raise Exception(
-                        "Request triggered, but ambulance not "
-                        "charged. Error."
+                        "Request triggered, but ambulance not charged. Error."
                     )
                 if SIMULATION_PARAMETERS["PRINT"]:
                     print(f"Before release users: {selected_charger.users}.")
@@ -1862,9 +1980,7 @@ class Ambulance:
             SIMULATION_DATA,
         )
 
-        required_increase_battery_to_full = (
-            self.MAX_BATTERY_LEVEL - self.battery
-        )
+        required_increase_battery_to_full = self.MAX_BATTERY_LEVEL - self.battery
 
         charging_time = Ambulance.calculate_charging_time(
             required_increase_battery_to_full, speed_charger
@@ -1882,10 +1998,7 @@ class Ambulance:
         try:
             request = selected_charger.request()
             if SIMULATION_PARAMETERS["PRINT"]:
-                print(
-                    "Before charging the queue is: "
-                    f"{selected_charger.queue}."
-                )
+                print(f"Before charging the queue is: {selected_charger.queue}.")
             start_waiting = self.env.now
             yield request
             waiting_time_at_charger = self.env.now - start_waiting
@@ -2011,9 +2124,7 @@ class Ambulance:
                         f"for {waiting_time_at_charger}."
                     )
             else:
-                raise Exception(
-                    "Request triggered, but ambulance not charged. Error."
-                )
+                raise Exception("Request triggered, but ambulance not charged. Error.")
 
             if SIMULATION_PARAMETERS["PRINT"]:
                 print(f"Before release users: {selected_charger.users}.")
@@ -2030,6 +2141,224 @@ class Ambulance:
                 f"The battery of ambulance {self.ambulance_ID} is equal "
                 f"to: {self.battery} kWh."
             )
+
+    def check_meal_break(self, SIMULATION_DATA, SIMULATION_PARAMETERS):
+        "Allow the vehicle crew to take a break at their home station if appropriate"
+
+        assert SIMULATION_PARAMETERS["ENGINE_TYPE"] == "diesel", (
+            "Electric ambulances are not supported for meal breaks"
+        )
+
+        assert SIMULATION_PARAMETERS["WITH_MEAL_BREAKS"], (
+            "Cannot check_meal_break if meal breaks are disabled"
+        )
+
+        if not self.had_meal_break and self.env.now >= self.meal_break_start:
+            if self.shift_end_time:
+                assert self.env.now < self.shift_end_time, (
+                    f"Trying to schedule a meal break after the end of shift for Ambulance {self.ambulance_ID}"
+                )
+
+            if self.assigned_to_patient:
+                # We'll check again automatically when we're done with this patient so return immediately
+                return
+
+            # Meal Break Policies
+            if not self.mb_allowed_by_policy(self):
+                print(
+                    f"{self.env.now}: Tried to trigger a meal break for ambulance {self.ambulance_ID} but was disallowed by policy"
+                )
+                return
+
+            if SIMULATION_PARAMETERS["PRINT"]:
+                print(
+                    f"{self.env.now}: Ambulance {self.ambulance_ID} is taking a",
+                    f"late meal break ({self.env.now - self.meal_break_end} mins late)"
+                    if self.env.now > self.meal_break_end
+                    else "meal break",
+                )
+
+            self.in_meal_break = True
+            meal_break_drive_start = self.env.now
+
+            if self.drives_to_base:
+                if SIMULATION_PARAMETERS["PRINT"]:
+                    print(
+                        f"{self.env.now}: Ambulance {self.ambulance_ID} is interrupted for a meal break while driving to base."
+                    )
+
+            # Determine the location the ambulance will now drive to for its break
+            # This can be either "home" or "closest"
+            current_loc_id = self.get_current_location_id(
+                SIMULATION_PARAMETERS, SIMULATION_DATA
+            )
+
+            if SIMULATION_PARAMETERS["MEAL_BREAK_LOCATION"] == "home":
+                destination_id = self.base_location_ID
+                est_saving = None
+            elif SIMULATION_PARAMETERS["MEAL_BREAK_LOCATION"] == "closest":
+                station_loc_ids = SIMULATION_DATA["NODES_BASE_LOCATIONS"].iloc[:, 0]
+
+                closest_station_id = (
+                    SIMULATION_DATA["SIREN_DRIVING_MATRIX"]
+                    .loc[
+                        current_loc_id,
+                        station_loc_ids,
+                    ]
+                    .idxmin()
+                )
+
+                time_to_base = (
+                    SIMULATION_DATA["SIREN_DRIVING_MATRIX"].loc[
+                        current_loc_id, self.base_location_ID
+                    ]
+                    / SIMULATION_PARAMETERS["NO_SIREN_PENALTY"]
+                )
+
+                time_to_closest = (
+                    SIMULATION_DATA["SIREN_DRIVING_MATRIX"].loc[
+                        current_loc_id, closest_station_id
+                    ]
+                    / SIMULATION_PARAMETERS["NO_SIREN_PENALTY"]
+                )
+
+                est_saving = time_to_base - time_to_closest
+                if est_saving > SIMULATION_PARAMETERS["MEAL_BREAK_CLOSEST_MIN_SAVING"]:
+                    destination_id = closest_station_id
+                else:
+                    destination_id = self.base_location_ID
+                    est_saving = None
+
+            else:
+                raise NotImplementedError(
+                    f"MEAL_BREAK_LOCATION must be set to either home or closest and not to {SIMULATION_PARAMETERS['MEAL_BREAK_LOCATION']}"
+                )
+
+            if SIMULATION_PARAMETERS["PRINT"]:
+                if destination_id != self.base_location_ID:
+                    print(
+                        f"{self.env.now}: Ambulance {self.ambulance_ID} uses the closer location {destination_id} for its break (est saving {est_saving:g} minutes)."
+                    )
+                else:
+                    print(
+                        f"{self.env.now}: Ambulance {self.ambulance_ID} uses its base location {destination_id} for its break."
+                    )
+
+            with self.resource.request(priority=1) as req:
+                assert not len(self.resource.queue), (
+                    "Ambulance cannot take a break as it's already busy"
+                )
+                yield req
+
+                driving_time = (
+                    SIMULATION_DATA["SIREN_DRIVING_MATRIX"].loc[
+                        current_loc_id, destination_id
+                    ]
+                    / SIMULATION_PARAMETERS["NO_SIREN_PENALTY"]
+                )
+                if SIMULATION_PARAMETERS["PRINT"]:
+                    print(
+                        f"{self.env.now}: Ambulance {self.ambulance_ID} "
+                        f"goes from {self.current_location_ID} to its base "
+                        f"station at {destination_id} in "
+                        f"{driving_time} for a meal break."
+                    )
+
+                # Driving Time
+                yield self.env.timeout(driving_time)
+                self.current_location_ID = destination_id
+                meal_break_drive_end = self.env.now
+
+                self.add_ambulance_data_diesel(
+                    idle=False,
+                    idle_time=None,
+                    source_location_ID=self.current_location_ID,
+                    target_location_ID=destination_id,
+                    SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
+                    SIMULATION_DATA=SIMULATION_DATA,
+                )
+
+                if SIMULATION_PARAMETERS["PRINT"]:
+                    print(
+                        f"{self.env.now}: Ambulance {self.ambulance_ID} "
+                        f"arrived at the station at {destination_id} "
+                        f" for a meal break"
+                    )
+
+                # Actual Break Time
+                if self.shift_start_time and self.shift_end_time:
+                    mb_duration_mins = SIMULATION_PARAMETERS["MEAL_BREAK_DURATION"][
+                        self.shift_duration
+                    ]
+                else:
+                    mb_duration_mins = 45
+
+                assert mb_duration_mins
+
+                if SIMULATION_PARAMETERS["PRINT"]:
+                    print(
+                        f"{self.env.now}: Ambulance {self.ambulance_ID} is resting for {mb_duration_mins} minutes."
+                    )
+
+                yield self.env.timeout(mb_duration_mins)
+                meal_break_end = self.env.now
+
+                if SIMULATION_PARAMETERS["PRINT"]:
+                    print(
+                        f"{self.env.now}: Ambulance {self.ambulance_ID} "
+                        f"completed its meal break at "
+                        f"station {self.current_location_ID}."
+                    )
+
+                SIMULATION_DATA["output_breaks"].append(
+                    (
+                        self.ambulance_ID,
+                        meal_break_drive_start,
+                        meal_break_drive_end,
+                        meal_break_end,
+                    )
+                )
+
+                self.in_meal_break = False
+                self.had_meal_break = True
+
+    def get_current_location_id(self, SIMULATION_PARAMETERS, SIMULATION_DATA):
+        # Ambulance is currently driving to a patient
+        if hasattr(self, "scene_arrival_time"):
+            driven_time = self.env.now - self.scene_drive_time_start
+            (new_x, new_y) = calculate_new_coordinate(
+                driven_time,
+                self.current_location_ID,
+                self.patient.patient_location_ID,
+                siren_off=False,
+                SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
+                SIMULATION_DATA=SIMULATION_DATA,
+            )
+            return select_closest_location_ID(
+                (new_x, new_y), SIMULATION_PARAMETERS, SIMULATION_DATA
+            )
+
+        assert not self.assigned_to_patient, (
+            "Should only care about the current location of an assigned ambulance when driving to the patient"
+        )
+
+        # Ambulance is currently driving to its base
+        if self.drives_to_base:
+            driven_time = self.env.now - self.drives_to_base_start_time
+
+            (new_x, new_y) = calculate_new_coordinate(
+                driven_time,
+                self.current_location_ID,
+                self.base_location_ID,
+                siren_off=True,
+                SIMULATION_PARAMETERS=SIMULATION_PARAMETERS,
+                SIMULATION_DATA=SIMULATION_DATA,
+            )
+            return select_closest_location_ID(
+                (new_x, new_y), SIMULATION_PARAMETERS, SIMULATION_DATA
+            )
+
+        return self.current_location_ID
 
     @staticmethod
     def calculate_battery_reduction_and_distance_driving(
@@ -2235,14 +2564,20 @@ class Ambulance:
                     "and the capacity is "
                     f"{charging_stations_location[str(location_ID)][2].capacity}."  # type: ignore
                 )
-            if len(charging_stations_location[str(location_ID)][0].users) < charging_stations_location[str(location_ID)][0].capacity:  # type: ignore
+            if (
+                len(charging_stations_location[str(location_ID)][0].users)
+                < charging_stations_location[str(location_ID)][0].capacity
+            ):  # type: ignore
                 if SIMULATION_PARAMETERS["PRINT"]:
                     print("A fast charger is available and thus selected.")
                 return (
                     charging_stations_location[str(location_ID)][0],
                     charging_stations_location[str(location_ID)][1],
                 )
-            elif len(charging_stations_location[str(location_ID)][2].users) < charging_stations_location[str(location_ID)][2].capacity:  # type: ignore
+            elif (
+                len(charging_stations_location[str(location_ID)][2].users)
+                < charging_stations_location[str(location_ID)][2].capacity
+            ):  # type: ignore
                 if SIMULATION_PARAMETERS["PRINT"]:
                     print("A regular charger is available and thus selected.")
                 return (

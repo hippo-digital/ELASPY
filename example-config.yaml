@@ -1,0 +1,34 @@
+#
+# Parameters that need to override the defaults in main.py
+#
+
+DATA_DIRECTORY: data/
+
+# Scenario Parameters
+
+PROCESS_TYPE: Time
+PROCESS_TIME: 720
+
+CALL_LAMBDA: 0.8
+PROB_GO_TO_HOSPITAL: 0.5
+AID_PARAMETERS: [0.5, -1.9, 31.0, 90]
+DROP_OFF_PARAMETERS: [0.4, -3.6, 38.3033, 60]
+CALL_CATEGORY_RATIOS: [0.25, 0.5, 0.25]
+
+# Meal Break Policy Parameters
+WITH_MEAL_BREAKS: True
+MEAL_BREAK_DURATION:
+  720: 50
+  600: 30
+
+MEAL_BREAK_LOCATION: home
+MEAL_BREAK_CLOSEST_MIN_SAVING: 5
+MAX_ON_BREAK: 999
+
+# En Route Reassignment
+WITH_EN_ROUTE_REASSIGNMENT: True
+EN_ROUTE_REASSIGNMENT_MINIMUM: 2
+
+# Simulation Parameters
+NUM_RUNS: 1
+START_SEED_VALUE: 110

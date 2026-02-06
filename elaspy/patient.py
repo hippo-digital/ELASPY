@@ -16,10 +16,18 @@ class Patient:
         The arrival location of the patient.
     hospital_location_ID : int
         The assigned hospital (in case the patient needs to be transported).
+    category: int
+        The category assigned to the call
     """
 
     def __init__(
-        self, ID: int, arrival_time: float, location_ID: int, hospital_ID: int
+        self,
+        ID: int,
+        arrival_time: float,
+        location_ID: int,
+        hospital_ID: int,
+        category: int,
+        to_hospital: bool,
     ) -> None:
         """
         Initializes a patient.
@@ -39,3 +47,8 @@ class Patient:
         self.arrival_time = arrival_time
         self.patient_location_ID = location_ID
         self.hospital_location_ID = hospital_ID
+        self.category = category
+        self.to_hospital = to_hospital
+
+    def __repr__(self) -> str:
+        return f"Patient {self.patient_ID} (Cat{self.category})"
