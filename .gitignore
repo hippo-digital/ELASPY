@@ -5,3 +5,5 @@ __pycache__
 
 # ignore .DS_store files
 .DS_Store
+
+data/*
