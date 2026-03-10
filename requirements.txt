@@ -1,7 +1,7 @@
 pandas==1.4.4
 numpy==1.23.1
 matplotlib==3.5.2
-simpy==4.0.1
+simpy==4.1.1
 scipy==1.9.3
 pulp==2.7.0
 pytest==7.3.1
@@ -12,3 +12,6 @@ sphinx-design==0.6.0
 sphinx==5.0.2
 sphinx-favicon==1.0.1
 setuptools<81
+pyyaml
+tqdm
+marimo

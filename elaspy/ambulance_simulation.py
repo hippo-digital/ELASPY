@@ -10,6 +10,7 @@ import numpy as np
 import numpy.random as rnd
 import pandas as pd
 import simpy as sp
+import simpy.util
 from ambulance import Ambulance
 from coordinate_methods import (
     calculate_new_coordinate,
@@ -721,7 +722,7 @@ def ambulance_initialization(
 
                 if amb.assigned_to_patient:
                     # Ambulance is busy so no action this time around - check again in 2 mins
-                    sp.util.start_delayed(env, available_mb_trigger(env, amb), 2)
+                    simpy.util.start_delayed(env, available_mb_trigger(env, amb), 2)
                     return
 
                 if not amb.mb_allowed_by_policy(amb):
@@ -729,7 +730,7 @@ def ambulance_initialization(
                     print(
                         f"{env.now}: Cannot start a meal break for ambulance {amb.ambulance_ID} as it is blocked by policy"
                     )
-                    sp.util.start_delayed(env, available_mb_trigger(env, amb), 2)
+                    simpy.util.start_delayed(env, available_mb_trigger(env, amb), 2)
                     return
 
                 # If there are no blockers we can run the actual meal break
