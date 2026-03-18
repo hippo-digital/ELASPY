@@ -1,59 +1,20 @@
-![ELASPY logo](doc/_static/ELASPY_light.svg)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-# ELASPY
+# ELASPY (Extended)
 
-ELASPY (Electric Ambulance Simulator Python) is a discrete-event simulator of the emergency response process of electric and diesel ambulances built in Python. For more information, please visit the ELASPY website: https://nanned.github.io/ELASPY.
+A forked and extended version of the [ELASPY](https://nanned.github.io/ELASPY) ([Github](https://github.com/NanneD/ELASPY)) simulator that extends the simulation with support for:
 
-The code is written in Python 3.10.8.
+* Ambulances with variable shift patterns
+* Meal Breaks for Ambulance crews during shift (including policy for starting the break)
+* Multiple prioritised categories of patient
+* Patient-Ambulance reassignment where a new closer ambulance becomes available during the drive-to-patient phase of the patient process
 
-## Installation
-
-For installation instructions, please see: https://nanned.github.io/ELASPY/installation/installation.html.
+Additionally, the simulation now takes parameters in YAML format to enable easier repeatable experimentation.  An example configuration file can be found in [example-config.yaml](example-config.yaml)
 
 ## Documentation
 
-For the user guide, including documentation and a quickstart, please see: https://nanned.github.io/ELASPY/user_guide/userguide.html.
-
-## Citing
-
-If you would like to cite ``ELASPY``, please consider citing the following paper:
-> Nanne A. Dieleman, Caroline J. Jagtenberg (2024).
-> Electric ambulances: will the need for charging affect response times?
-> Preprint at SSRN: https://ssrn.com/abstract=4874479. doi: 10.2139/ssrn.4874479.
-
-Or, using the following BibTeX entry:
-
-```bibtex
-@article{Dieleman_Jagtenberg_2024,
-	title = {Electric ambulances: will the need for charging affect response times?},
-	author = {Dieleman, Nanne A. and Jagtenberg, Caroline J.},
-	year = {2024},
-        url = {https://ssrn.com/abstract=4874479},
-	doi = {10.2139/ssrn.4874479},
-        journal = {Preprint at SSRN}
-}
-```
+Much of the upstream documentation on the functioning of the simulator and the parameters used is still relevant to this repo.  For additional parameters see the comments in the [example-config.yaml] file.
 
 ## License
 
 The GNU General Public License v3 (GPL-3) license is used. For more information, please see the included LICENSE.md file.
-
-## Contributing
-
-If you would like to contribute to ``ELASPY`` in any way, please feel free to create an [issue](https://github.com/NanneD/ELASPY/issues) to discuss what you would like to add or change. Moreover, make sure that your code submission includes:
-- tests
-- type hints
-- documentation
-- docstrings for the added/changed methods, classes, etc. according to the NumPy docstrings format
-
-To check whether the type hints and tests run smoothly, you can follow these steps:
-1. Open the command line and move to the ``ELASPY`` folder.
-2. Run the tests by using the following command:
-```
-pytest elaspy/tests.py
-```
-3. Run the mypy checker by using:
-```
-mypy elaspy/
-```

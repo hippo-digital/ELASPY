@@ -13,22 +13,66 @@ CALL_LAMBDA: 0.8
 PROB_GO_TO_HOSPITAL: 0.5
 AID_PARAMETERS: [0.5, -1.9, 31.0, 90]
 DROP_OFF_PARAMETERS: [0.4, -3.6, 38.3033, 60]
+
+# Define the probability for each patient to be in the given priority class
+# (from highest-priority to lowest-priority), the number of priority classes
+# is set based on how many probabilities are in the list. Must sum to 1.
 CALL_CATEGORY_RATIOS: [0.25, 0.5, 0.25]
 
+#
+# Ambulance Shifts
+#
+# Each Ambulance now requires a shift start and end time and a shift duration.
+# These should be provided as minute offsets in the columns shift_start, shift_end,
+# and shift_duration specified in minutes in th AMBULANCE_BASE_LOCATIONS_FILE.
+#
+# In addition, a column had_meal_break should be provided which is 1 if the
+# ambulance has already taken it's break before the start of the simulation period
+# or 0 otherwise.
+
+#
 # Meal Break Policy Parameters
+#
+
+# Enable meal breaks for the ambulances - the "window" in which each break
+# can be taken is defined in new columns meal_break_start, meal_break_end
+# in the AMBULANCE_BASE_LOCATIONS_FILE.csv file
 WITH_MEAL_BREAKS: True
+
+# Specify the duration of the required meal break based on the shift duration
+# Here a 720 minute shift grants a 50 minute break and a 600 minute shift
+# a 30 minute break
 MEAL_BREAK_DURATION:
   720: 50
   600: 30
 
+# To take a meal break the ambulance crew will first drive to a station. This
+# parameter determines if they drive back to their "home" station, or to
+# whichever station is the closest at the start of their break
+# Values: 'home' or 'closest'
 MEAL_BREAK_LOCATION: home
+
+# This parameter determine how big the difference between time-to-nearest-station
+# and time-to-home-station needs to be before diverting the crew to take a break
+# at the nearest station.  This would be ignored if MEAL_BREAK_LOCATION == 'home'
 MEAL_BREAK_CLOSEST_MIN_SAVING: 5
+
+# MAX_ON_BREAK controls the number of Ambulances that are allowed to be
+# simultaneously on break
 MAX_ON_BREAK: 999
 
+#
 # En Route Reassignment
+#
+
+# Controls if en-route reassignment to new ambulances that become available is
+# enabled in the simulation.
 WITH_EN_ROUTE_REASSIGNMENT: True
+
+# Prevent reassignment unless the calculated response time saving is great than
+# this many minutes
 EN_ROUTE_REASSIGNMENT_MINIMUM: 2
 
-# Simulation Parameters
+# Overrides for any other Simulation Parameters defined in main.py
 NUM_RUNS: 1
 START_SEED_VALUE: 110
