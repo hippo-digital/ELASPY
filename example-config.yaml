@@ -24,7 +24,7 @@ CALL_CATEGORY_RATIOS: [0.25, 0.5, 0.25]
 #
 # Each Ambulance now requires a shift start and end time and a shift duration.
 # These should be provided as minute offsets in the columns shift_start, shift_end,
-# and shift_duration specified in minutes in th AMBULANCE_BASE_LOCATIONS_FILE.
+# and shift_duration specified in minutes in the AMBULANCE_BASE_LOCATIONS_FILE.
 #
 # In addition, a column had_meal_break should be provided which is 1 if the
 # ambulance has already taken it's break before the start of the simulation period
